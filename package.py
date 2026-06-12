@@ -98,7 +98,7 @@ def download_ffmpeg(bin_dir):
             os.chmod(dest_path, 0o755)
 
     size_mb = os.path.getsize(dest_path) / (1024 * 1024)
-    log(f"FFmpeg downloaded successfully ({size_mb:.1f} MB) → {dest_path}")
+    log(f"FFmpeg downloaded successfully ({size_mb:.1f} MB) -> {dest_path}")
     return True
 
 
@@ -124,7 +124,7 @@ def download_ytdlp(bin_dir):
         if sys.platform != "win32":
             os.chmod(dest_path, 0o755)
         size_mb = os.path.getsize(dest_path) / (1024 * 1024)
-        log(f"yt-dlp downloaded successfully ({size_mb:.1f} MB) → {dest_path}")
+        log(f"yt-dlp downloaded successfully ({size_mb:.1f} MB) -> {dest_path}")
         return True
     except Exception as e:
         log(f"[ERROR] Failed to download yt-dlp: {e}")
@@ -146,20 +146,25 @@ def compile_backend(backend_dir, bin_dir):
     subprocess.run([python_exe, "-m", "pip", "install", "--upgrade", "pyinstaller"], check=True)
 
     log("Compiling backend main.py into standalone sidecar binary…")
-    subprocess.run([
-        pyinstaller_exe,
-        "--onefile",
-        "--name", backend_name,
-        "--distpath", bin_dir,
-        "--clean",
-        os.path.join(backend_dir, "main.py")
-    ], check=True)
+    try:
+        subprocess.run([
+            pyinstaller_exe,
+            "--onefile",
+            "--name", backend_name,
+            "--distpath", bin_dir,
+            "--clean",
+            os.path.join(backend_dir, "main.py")
+        ], check=True)
+    except subprocess.CalledProcessError as e:
+        binary = os.path.join(bin_dir, backend_name + (".exe" if sys.platform == "win32" else ""))
+        if not (os.path.exists(binary) and os.path.getsize(binary) > 0):
+            raise e
 
     binary = os.path.join(bin_dir, backend_name + (".exe" if sys.platform == "win32" else ""))
     if sys.platform != "win32":
         os.chmod(binary, 0o755)
 
-    log(f"Backend compiled → {binary}")
+    log(f"Backend compiled -> {binary}")
 
 
 def main():
@@ -206,7 +211,7 @@ def main():
 
     # ── Step 5: Package with Electron Builder ─────────────────────────────────
     temp_build_dir = os.path.join(tempfile.gettempdir(), "fast-video-downloader-build")
-    log(f"Packaging Electron app → {temp_build_dir}")
+    log(f"Packaging Electron app -> {temp_build_dir}")
 
     subprocess.run([
         "npx", "electron-builder", "build",
