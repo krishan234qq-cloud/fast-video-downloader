@@ -190,45 +190,87 @@ class FolderRequest(BaseModel):
     pass
 
 
-@app.post("/api/info")
-async def get_video_info(request: InfoRequest):
-    ydl_opts = {
+def _build_ydl_opts(browser: str = None, user_agent: str = None, force_generic: bool = False) -> dict:
+    """Build base yt-dlp options, shared between info and download endpoints."""
+    opts = {
         "quiet": True,
         "no_warnings": True,
         "extract_flat": False,
         "check_formats": False,
     }
-    if request.browser and request.browser.lower() != "none":
-        ydl_opts["cookiesfrombrowser"] = (request.browser.lower(), None, None, None)
-    if request.user_agent:
-        ydl_opts["http_headers"] = {"User-Agent": request.user_agent}
+    if force_generic:
+        opts["force_generic_extractor"] = True
+    if browser and browser.lower() != "none":
+        opts["cookiesfrombrowser"] = (browser.lower(), None, None, None)
+    if user_agent:
+        opts["http_headers"] = {"User-Agent": user_agent}
+    return opts
 
+
+def _extract_info_with_fallback(url: str, browser: str = None, user_agent: str = None):
+    """Try normal extraction first; fall back to generic extractor on unsupported URLs.
+    Returns (info_dict, used_generic_bool).
+    """
     try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(request.url, download=False)
+        opts = _build_ydl_opts(browser, user_agent, force_generic=False)
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            return ydl.extract_info(url, download=False), False
+    except Exception as first_err:
+        first_msg = str(first_err)
+        is_unsupported = (
+            "unsupported url" in first_msg.lower()
+            or "no video formats found" in first_msg.lower()
+            or "unable to extract" in first_msg.lower()
+        )
+        if is_unsupported:
+            try:
+                opts = _build_ydl_opts(browser, user_agent, force_generic=True)
+                with yt_dlp.YoutubeDL(opts) as ydl:
+                    return ydl.extract_info(url, download=False), True
+            except Exception:
+                pass
+        raise first_err
 
-            duration_secs = info.get("duration") or 0
-            duration_str = seconds_to_hhmmss(int(duration_secs))
 
-            formats = info.get("formats") or []
+@app.post("/api/info")
+async def get_video_info(request: InfoRequest):
+    try:
+        info, used_generic = _extract_info_with_fallback(
+            request.url, request.browser, request.user_agent
+        )
 
-            formats_details = {}
-            for q_id in ["4k", "1080p60", "1080p30", "720p", "audio"]:
-                formats_details[q_id] = extract_quality_details(formats, q_id, duration_secs)
+        duration_secs = info.get("duration") or 0
+        duration_str = seconds_to_hhmmss(int(duration_secs))
 
-            return {
-                "title": info.get("title") or "Unknown",
-                "duration": duration_str,
-                "uploader": info.get("uploader") or info.get("channel") or "Unknown",
-                "thumbnail": info.get("thumbnail") or "",
-                "formats": formats_details
-            }
+        formats = info.get("formats") or []
+
+        formats_details = {}
+        for q_id in ["4k", "1080p60", "1080p30", "720p", "audio"]:
+            formats_details[q_id] = extract_quality_details(formats, q_id, duration_secs)
+
+        return {
+            "title": info.get("title") or "Unknown",
+            "duration": duration_str,
+            "uploader": info.get("uploader") or info.get("channel") or "Unknown",
+            "thumbnail": info.get("thumbnail") or "",
+            "formats": formats_details,
+            "used_generic_extractor": used_generic,
+        }
     except Exception as e:
         err_msg = str(e)
         if "locked" in err_msg.lower() or "permission" in err_msg.lower() or "credentials" in err_msg.lower() or "cookie" in err_msg.lower():
             raise HTTPException(
                 status_code=400,
                 detail=f"Cookies extraction failed because the database is locked. Please close your {request.browser} browser and try again."
+            )
+        if "unsupported url" in err_msg.lower():
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "This website is not supported and no embedded video was found. "
+                    "Try enabling Browser Cookies Sync in Settings if the page needs a login, "
+                    "or paste a direct video/stream URL."
+                )
             )
         raise HTTPException(status_code=400, detail=err_msg)
 
@@ -249,6 +291,21 @@ async def download_video(request: DownloadRequest):
     else:
         out_template_for_ytdl = out_template
 
+    # Probe whether generic extractor is needed (same two-pass logic as /api/info)
+    needs_generic = False
+    try:
+        probe_opts = _build_ydl_opts(request.browser, request.user_agent, force_generic=False)
+        with yt_dlp.YoutubeDL(probe_opts) as ydl:
+            ydl.extract_info(request.url, download=False)
+    except Exception as probe_err:
+        probe_msg = str(probe_err)
+        if (
+            "unsupported url" in probe_msg.lower()
+            or "no video formats found" in probe_msg.lower()
+            or "unable to extract" in probe_msg.lower()
+        ):
+            needs_generic = True
+
     cmd = get_ytdlp_command() + [
         "--format", fmt,
         "--output", out_template_for_ytdl,
@@ -257,6 +314,9 @@ async def download_video(request: DownloadRequest):
         "--no-check-formats",
         "-N", str(request.concurrent_downloads),
     ]
+
+    if needs_generic:
+        cmd.append("--force-generic-extractor")
 
     if request.browser and request.browser.lower() != "none":
         cmd += ["--cookies-from-browser", request.browser.lower()]
