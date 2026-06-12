@@ -1,10 +1,32 @@
-const { app, BrowserWindow, shell } = require('electron');
+const { app, BrowserWindow, shell, ipcMain } = require('electron');
 const path = require('path');
 const { spawn } = require('child_process');
 const http = require('http');
 
 let mainWindow;
 let backendProcess = null;
+
+ipcMain.handle('start-backend', async () => {
+  if (!app.isPackaged) {
+    if (backendProcess && backendProcess.exitCode === null) {
+      return { status: 'already_running' };
+    }
+    const backendDir = path.join(__dirname, '..', 'backend');
+    const pythonExe = process.platform === 'win32'
+      ? path.join(backendDir, 'venv', 'Scripts', 'python.exe')
+      : path.join(backendDir, 'venv', 'bin', 'python');
+    backendProcess = spawn(pythonExe, ['-m', 'uvicorn', 'main:app', '--host', '127.0.0.1', '--port', '8000'], {
+      cwd: backendDir,
+      windowsHide: true,
+    });
+    return { status: 'started' };
+  }
+  if (backendProcess && backendProcess.exitCode === null) {
+    return { status: 'already_running' };
+  }
+  startBackend();
+  return { status: 'started' };
+});
 
 function startBackend() {
   if (!app.isPackaged) return;

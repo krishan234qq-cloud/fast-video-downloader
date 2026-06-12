@@ -28,7 +28,7 @@ function friendlyError(e, launcherOnline) {
   if (!e) return 'Something went wrong.';
   const msg = e.message || String(e);
   if (msg === 'Failed to fetch' || msg.includes('NetworkError') || msg.includes('ERR_CONNECTION_REFUSED')) {
-    if (launcherOnline) {
+    if (launcherOnline || (window.electron && window.electron.isElectron)) {
       return 'Backend offline. Click "Start Server" above to launch.';
     }
     return 'Backend offline. Run start-launcher.bat to enable.';
@@ -123,7 +123,19 @@ export default function App() {
     setIsStartingBackend(true);
     setFetchError('');
     try {
-      if (launcherOnline) {
+      if (window.electron && window.electron.isElectron) {
+        await window.electron.startBackend();
+        for (let i = 0; i < 6; i++) {
+          await new Promise(r => setTimeout(r, 600));
+          try {
+            const r = await fetch(`${API}/health`, { signal: AbortSignal.timeout(600) });
+            if (r.ok) {
+              setBackendOnline(true);
+              break;
+            }
+          } catch { /* polling — ignore failures */ }
+        }
+      } else if (launcherOnline) {
         const res = await fetch('http://localhost:9999/start', { method: 'POST' });
         if (res.ok) {
           for (let i = 0; i < 6; i++) {
@@ -134,7 +146,7 @@ export default function App() {
                 setBackendOnline(true);
                 break;
               }
-            } catch { /* polling — ignore connection failures */ }
+            } catch { /* polling — ignore failures */ }
           }
         } else {
           setFetchError('Failed to trigger backend start via launcher.');
@@ -150,7 +162,7 @@ export default function App() {
   }, [launcherOnline, isStartingBackend]);
 
   useEffect(() => {
-    if (launcherOnline && backendOnline === false && !isStartingBackend) {
+    if ((launcherOnline || (window.electron && window.electron.isElectron)) && backendOnline === false && !isStartingBackend) {
       const timer = setTimeout(() => {
         handleStartBackend();
       }, 0);
