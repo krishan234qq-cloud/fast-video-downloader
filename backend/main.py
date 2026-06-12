@@ -578,3 +578,8 @@ async def select_folder():
         downloads = os.path.join(os.path.expanduser("~"), "Downloads")
         os.makedirs(downloads, exist_ok=True)
         return {"path": downloads}
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="127.0.0.1", port=8000)

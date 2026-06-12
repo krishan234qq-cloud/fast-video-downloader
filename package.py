@@ -135,11 +135,9 @@ def compile_backend(backend_dir, bin_dir):
     """Compile backend/main.py into a standalone sidecar binary using PyInstaller."""
     if sys.platform == "win32":
         python_exe = os.path.join(backend_dir, "venv", "Scripts", "python.exe")
-        pyinstaller_exe = os.path.join(backend_dir, "venv", "Scripts", "pyinstaller.exe")
         backend_name = "backend"
     else:
         python_exe = os.path.join(backend_dir, "venv", "bin", "python")
-        pyinstaller_exe = os.path.join(backend_dir, "venv", "bin", "pyinstaller")
         backend_name = "backend"
 
     log("Installing / upgrading PyInstaller in backend venv…")
@@ -148,7 +146,9 @@ def compile_backend(backend_dir, bin_dir):
     log("Compiling backend main.py into standalone sidecar binary…")
     try:
         subprocess.run([
-            pyinstaller_exe,
+            python_exe,
+            "-m",
+            "PyInstaller",
             "--onefile",
             "--name", backend_name,
             "--distpath", bin_dir,
@@ -156,6 +156,7 @@ def compile_backend(backend_dir, bin_dir):
             os.path.join(backend_dir, "main.py")
         ], check=True)
     except subprocess.CalledProcessError as e:
+        print(f"[ERROR] PyInstaller compilation failed: {e}")
         binary = os.path.join(bin_dir, backend_name + (".exe" if sys.platform == "win32" else ""))
         if not (os.path.exists(binary) and os.path.getsize(binary) > 0):
             raise e
@@ -165,6 +166,7 @@ def compile_backend(backend_dir, bin_dir):
         os.chmod(binary, 0o755)
 
     log(f"Backend compiled -> {binary}")
+
 
 
 def main():
