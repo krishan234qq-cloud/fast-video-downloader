@@ -17,7 +17,8 @@ if %errorlevel% neq 0 (
     pause
     exit /b 1
 )
-for /f "tokens=*" %%v in ('python --version 2^>^&1') do echo [OK] %%v is installed.
+python --version
+echo [OK] Python is installed.
 
 where npm >nul 2>nul
 if %errorlevel% neq 0 (
@@ -28,7 +29,8 @@ if %errorlevel% neq 0 (
     pause
     exit /b 1
 )
-for /f "tokens=*" %%v in ('node --version 2^>^&1') do echo [OK] Node.js %%v is installed.
+node --version
+echo [OK] Node.js is installed.
 
 where ffmpeg >nul 2>nul
 if %errorlevel% neq 0 (
