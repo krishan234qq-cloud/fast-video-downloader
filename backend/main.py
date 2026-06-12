@@ -7,6 +7,8 @@ import os
 import json
 import subprocess
 import sys
+import re
+import urllib.request
 import tkinter
 import tkinter.filedialog
 
@@ -190,6 +192,144 @@ class FolderRequest(BaseModel):
     pass
 
 
+# ---------------------------------------------------------------------------
+# Custom Sankakucomplex extractor
+# yt-dlp has no native extractor for sankakucomplex, so we call their API
+# directly and return a synthetic info-dict that the rest of the pipeline
+# can consume unchanged.
+# ---------------------------------------------------------------------------
+
+SANKAKU_POST_RE = re.compile(
+    r'(?:https?://)?(?:www\.)?sankakucomplex\.com/posts?/([A-Za-z0-9]+)',
+    re.IGNORECASE,
+)
+
+
+def _get_http_cookies_from_browser(browser: str) -> dict:
+    """Extract cookies for sankakucomplex from the given browser via yt-dlp."""
+    try:
+        import browser_cookie3  # type: ignore
+    except ImportError:
+        return {}
+    try:
+        loader = getattr(browser_cookie3, browser.lower(), None)
+        if loader is None:
+            return {}
+        cj = loader(domain_name="sankakucomplex.com")
+        return {c.name: c.value for c in cj}
+    except Exception:
+        return {}
+
+
+def _sankakucomplex_extract(post_id: str, browser: str = None) -> dict | None:
+    """
+    Fetch post metadata from the Sankakucomplex v2 API.
+    Returns a yt-dlp-compatible info dict on success, None on failure.
+    """
+    # Both known API base URLs — try each
+    api_bases = [
+        f"https://capi-v2.sankakucomplex.com/posts/{post_id}",
+        f"https://sankakuapi.com/v2/posts/{post_id}",
+    ]
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                      "(KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+        "Accept": "application/json",
+        "Referer": "https://www.sankakucomplex.com/",
+    }
+
+    # Try to pull cookies from browser if requested
+    cookies_header = ""
+    if browser and browser.lower() != "none":
+        cookies_dict = _get_http_cookies_from_browser(browser)
+        if cookies_dict:
+            cookies_header = "; ".join(f"{k}={v}" for k, v in cookies_dict.items())
+
+    for api_url in api_bases:
+        try:
+            req = urllib.request.Request(api_url, headers=dict(headers))
+            if cookies_header:
+                req.add_header("Cookie", cookies_header)
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                data = json.loads(resp.read().decode())
+
+            # The response may be the post directly, or wrapped in {"post": {...}}
+            post = data.get("post", data) if isinstance(data, dict) else data
+            if not isinstance(post, dict):
+                continue
+
+            file_url = post.get("file_url") or post.get("sample_url") or post.get("preview_url")
+            if not file_url:
+                continue
+
+            # Make sure it looks like a video
+            file_type = post.get("file_type", "") or ""
+            ext_hint = (post.get("file_ext") or "").lower()
+            if "video" not in file_type.lower() and ext_hint not in ("mp4", "webm", "mov", "avi", "mkv"):
+                # Not a video post
+                return None
+
+            # Build a synthetic yt-dlp info dict
+            duration = post.get("video_duration") or post.get("duration") or 0
+            try:
+                duration = float(duration)
+            except (TypeError, ValueError):
+                duration = 0
+
+            width = post.get("width") or 0
+            height = post.get("height") or 0
+            filesize = post.get("file_size") or 0
+
+            # Try to get a thumbnail
+            thumbnail = (
+                post.get("preview_url")
+                or post.get("sample_url")
+                or ""
+            )
+            if thumbnail and thumbnail.startswith("//"):
+                thumbnail = "https:" + thumbnail
+
+            title = (
+                post.get("tags", [{}])[0].get("name_en") if isinstance(post.get("tags"), list) and post.get("tags") else None
+            ) or f"Sankakucomplex {post_id}"
+
+            uploader = post.get("author", {}).get("name") if isinstance(post.get("author"), dict) else "Sankakucomplex"
+
+            info = {
+                "id": post_id,
+                "title": title,
+                "url": file_url,
+                "ext": ext_hint or "mp4",
+                "width": width or None,
+                "height": height or None,
+                "filesize": filesize or None,
+                "duration": duration or None,
+                "thumbnail": thumbnail,
+                "uploader": uploader or "Sankakucomplex",
+                "webpage_url": f"https://www.sankakucomplex.com/posts/{post_id}",
+                "extractor": "sankakucomplex",
+                "formats": [
+                    {
+                        "url": file_url,
+                        "ext": ext_hint or "mp4",
+                        "width": width or None,
+                        "height": height or None,
+                        "filesize": filesize or None,
+                        "vcodec": "h264",
+                        "acodec": "aac",
+                        "tbr": None,
+                        "fps": None,
+                    }
+                ],
+            }
+            return info
+        except Exception:
+            continue
+
+    return None
+
+
 def _build_ydl_opts(browser: str = None, user_agent: str = None, force_generic: bool = False) -> dict:
     """Build base yt-dlp options, shared between info and download endpoints."""
     opts = {
@@ -209,8 +349,24 @@ def _build_ydl_opts(browser: str = None, user_agent: str = None, force_generic: 
 
 def _extract_info_with_fallback(url: str, browser: str = None, user_agent: str = None):
     """Try normal extraction first; fall back to generic extractor on unsupported URLs.
+    Custom extractors (e.g. sankakucomplex) are tried before yt-dlp.
     Returns (info_dict, used_generic_bool).
     """
+    # --- Custom extractor: Sankakucomplex ---
+    sk_match = SANKAKU_POST_RE.search(url)
+    if sk_match:
+        post_id = sk_match.group(1)
+        sk_info = _sankakucomplex_extract(post_id, browser)
+        if sk_info:
+            return sk_info, False
+        # If custom extractor failed (e.g. login required), give a clear error
+        raise Exception(
+            "Sankakucomplex video requires a premium/logged-in account. "
+            "Open Settings (⚙) → Browser Cookies Sync and select the browser "
+            "where you are logged into sankakucomplex.com, then try again."
+        )
+
+    # --- Standard yt-dlp extraction ---
     try:
         opts = _build_ydl_opts(browser, user_agent, force_generic=False)
         with yt_dlp.YoutubeDL(opts) as ydl:
@@ -258,7 +414,16 @@ async def get_video_info(request: InfoRequest):
         }
     except Exception as e:
         err_msg = str(e)
-        if "locked" in err_msg.lower() or "permission" in err_msg.lower() or "credentials" in err_msg.lower() or "cookie" in err_msg.lower():
+        # Sankakucomplex-specific errors (raised explicitly by our extractor)
+        if "sankakucomplex" in err_msg.lower():
+            raise HTTPException(status_code=400, detail=err_msg)
+        # Cookie DB lock error — only applies when a real browser is selected
+        is_real_browser = request.browser and request.browser.lower() != "none"
+        if is_real_browser and (
+            "locked" in err_msg.lower()
+            or ("permission" in err_msg.lower() and "cookie" in err_msg.lower())
+            or "credentials" in err_msg.lower()
+        ):
             raise HTTPException(
                 status_code=400,
                 detail=f"Cookies extraction failed because the database is locked. Please close your {request.browser} browser and try again."
@@ -291,20 +456,44 @@ async def download_video(request: DownloadRequest):
     else:
         out_template_for_ytdl = out_template
 
-    # Probe whether generic extractor is needed (same two-pass logic as /api/info)
+    # --- Resolve the actual download URL ---
+    # For Sankakucomplex: resolve the direct file_url via API, then pass that
+    # to yt-dlp (which can download direct video URLs on any site).
+    # For all other URLs: use the two-pass generic-extractor probe.
+    download_url = request.url
     needs_generic = False
-    try:
-        probe_opts = _build_ydl_opts(request.browser, request.user_agent, force_generic=False)
-        with yt_dlp.YoutubeDL(probe_opts) as ydl:
-            ydl.extract_info(request.url, download=False)
-    except Exception as probe_err:
-        probe_msg = str(probe_err)
-        if (
-            "unsupported url" in probe_msg.lower()
-            or "no video formats found" in probe_msg.lower()
-            or "unable to extract" in probe_msg.lower()
-        ):
-            needs_generic = True
+
+    sk_match = SANKAKU_POST_RE.search(request.url)
+    if sk_match:
+        post_id = sk_match.group(1)
+        sk_info = _sankakucomplex_extract(post_id, request.browser)
+        if sk_info and sk_info.get("url"):
+            download_url = sk_info["url"]
+            # Use a sane output filename based on the post id
+            out_template_for_ytdl = os.path.join(
+                save_dir,
+                f"sankaku_{post_id}.%(ext)s" if request.download_type != "custom"
+                else f"sankaku_{post_id}.temp.%(ext)s"
+            )
+        else:
+            # Can't resolve — streaming will fail; surface a clear error in the log
+            def _err_stream():
+                yield f"data: {json.dumps({'log': '[sankaku] ERROR: Could not resolve video URL. Make sure you are logged in and have selected the correct browser in Settings.'})}\\n\\n"
+                yield f"data: {json.dumps({'status': 'error', 'detail': 'Sankakucomplex video could not be resolved. Enable Browser Cookies Sync in Settings.'})}\\n\\n"
+            return StreamingResponse(_err_stream(), media_type="text/event-stream")
+    else:
+        try:
+            probe_opts = _build_ydl_opts(request.browser, request.user_agent, force_generic=False)
+            with yt_dlp.YoutubeDL(probe_opts) as ydl:
+                ydl.extract_info(request.url, download=False)
+        except Exception as probe_err:
+            probe_msg = str(probe_err)
+            if (
+                "unsupported url" in probe_msg.lower()
+                or "no video formats found" in probe_msg.lower()
+                or "unable to extract" in probe_msg.lower()
+            ):
+                needs_generic = True
 
     cmd = get_ytdlp_command() + [
         "--format", fmt,
@@ -326,7 +515,7 @@ async def download_video(request: DownloadRequest):
     if is_audio:
         cmd += ["--extract-audio", "--audio-format", "mp3"]
 
-    cmd.append(request.url)
+    cmd.append(download_url)
 
     def stream_output():
         try:
