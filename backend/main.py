@@ -30,18 +30,25 @@ else:
 
 def get_ffmpeg_path():
     if IS_FROZEN:
-        p = os.path.join(BASE_BIN_DIR, "ffmpeg.exe" if sys.platform == "win32" else "ffmpeg")
-        if os.path.exists(p):
-            return p
+        name = "ffmpeg.exe" if sys.platform == "win32" else "ffmpeg"
+        for d in [BASE_BIN_DIR, os.getcwd(), os.path.dirname(sys.executable)]:
+            if d:
+                p = os.path.join(d, name)
+                if os.path.exists(p):
+                    return p
     return "ffmpeg"
 
 
 def get_ytdlp_command():
     if IS_FROZEN:
-        p = os.path.join(BASE_BIN_DIR, "yt-dlp.exe" if sys.platform == "win32" else "yt-dlp")
-        if os.path.exists(p):
-            return [p]
-    return [sys.executable, "-m", "yt_dlp"]
+        name = "yt-dlp.exe" if sys.platform == "win32" else "yt-dlp"
+        for d in [BASE_BIN_DIR, os.getcwd(), os.path.dirname(sys.executable)]:
+            if d:
+                p = os.path.join(d, name)
+                if os.path.exists(p):
+                    return [p]
+        return [name]
+    return [sys.executable, "-u", "-m", "yt_dlp"]
 
 
 @app.get("/health")
@@ -322,20 +329,13 @@ def _build_ydl_opts(browser: str = None, user_agent: str = None, force_generic: 
         "socket_timeout": 30,
         "retries": 5,
         "fragment_retries": 5,
-        "http_headers": {
-            "User-Agent": user_agent or (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/124.0.0.0 Safari/537.36"
-            ),
-        },
     }
     if force_generic:
         opts["force_generic_extractor"] = True
     if browser and browser.lower() != "none":
         opts["cookiesfrombrowser"] = (browser.lower(), None, None, None)
     if user_agent:
-        opts["http_headers"]["User-Agent"] = user_agent
+        opts["http_headers"] = {"User-Agent": user_agent}
     return opts
 
 
@@ -502,12 +502,6 @@ async def download_video(request: DownloadRequest):
         "--socket-timeout", "30",
         "--retries", "5",
         "--fragment-retries", "5",
-        "--user-agent",
-        request.user_agent or (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/124.0.0.0 Safari/537.36"
-        ),
         "-N", str(request.concurrent_downloads),
     ]
 
@@ -517,6 +511,9 @@ async def download_video(request: DownloadRequest):
     if request.browser and request.browser.lower() != "none":
         cmd += ["--cookies-from-browser", request.browser.lower()]
 
+    if request.user_agent:
+        cmd += ["--user-agent", request.user_agent]
+
     if is_audio:
         cmd += ["--extract-audio", "--audio-format", "mp3"]
 
@@ -524,6 +521,8 @@ async def download_video(request: DownloadRequest):
 
     def stream_output():
         try:
+            print(f"[downloader] Executing: {cmd}")
+            yield f"data: {json.dumps({'log': f'[downloader] Starting download for {request.url}'})}\n\n"
             proc = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
