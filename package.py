@@ -3,76 +3,149 @@ import os
 import shutil
 import urllib.request
 import subprocess
+import zipfile
+import tarfile
+import tempfile
 
 def log(msg):
     print(f"\n>>> {msg}\n")
 
-def get_real_ffmpeg_path():
-    ffmpeg_path = shutil.which("ffmpeg")
-    if not ffmpeg_path:
-        return None
+# ---------------------------------------------------------------------------
+# FFmpeg static binary downloader — works on all platforms, no system install
+# needed. Downloads pre-built static binaries from trusted GitHub releases.
+# ---------------------------------------------------------------------------
+FFMPEG_URLS = {
+    "win32": {
+        "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip",
+        "extract": "zip",
+        # Path inside the archive to ffmpeg.exe
+        "bin_path": lambda root: _find_in_tree(root, "ffmpeg.exe"),
+        "dest_name": "ffmpeg.exe",
+    },
+    "darwin": {
+        # macOS static build — single binary download
+        "url": "https://evermeet.cx/ffmpeg/getrelease/ffmpeg/zip",
+        "extract": "zip",
+        "bin_path": lambda root: _find_in_tree(root, "ffmpeg"),
+        "dest_name": "ffmpeg",
+    },
+    "linux": {
+        "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz",
+        "extract": "tarxz",
+        "bin_path": lambda root: _find_in_tree(root, "ffmpeg"),
+        "dest_name": "ffmpeg",
+    },
+}
 
-    base, ext = os.path.splitext(ffmpeg_path)
-    shim_path = base + ".shim"
-    if os.path.exists(shim_path):
+
+def _find_in_tree(root, filename):
+    """Walk directory tree and return path of first matching filename."""
+    for dirpath, _dirs, files in os.walk(root):
+        for f in files:
+            if f == filename:
+                return os.path.join(dirpath, f)
+    return None
+
+
+def download_ffmpeg(bin_dir):
+    """Download a static FFmpeg binary for the current platform into bin_dir."""
+    plat = sys.platform  # "win32", "darwin", "linux"
+    # Normalise linux variants
+    if plat.startswith("linux"):
+        plat = "linux"
+
+    info = FFMPEG_URLS.get(plat)
+    if not info:
+        log(f"[WARNING] No static FFmpeg build known for platform '{plat}'. "
+            "Please manually copy ffmpeg into frontend/bin/.")
+        return False
+
+    dest_name = info["dest_name"]
+    dest_path = os.path.join(bin_dir, dest_name)
+
+    if os.path.exists(dest_path) and os.path.getsize(dest_path) > 1_000_000:
+        log(f"FFmpeg already present at {dest_path}, skipping download.")
+        return True
+
+    log(f"Downloading static FFmpeg for {plat} …")
+    log(f"Source: {info['url']}")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        archive_path = os.path.join(tmp, "ffmpeg_archive")
         try:
-            with open(shim_path, "r", encoding="utf-8") as f:
-                for line in f:
-                    if line.strip().lower().startswith("path"):
-                        parts = line.split("=", 1)
-                        if len(parts) == 2:
-                            real_path = parts[1].strip().strip('"').strip("'")
-                            real_path = os.path.expandvars(real_path)
-                            if os.path.exists(real_path):
-                                print(f"Resolved Scoop shim -> real ffmpeg: {real_path}")
-                                return real_path
+            urllib.request.urlretrieve(info["url"], archive_path)
         except Exception as e:
-            print(f"Error parsing scoop shim: {e}")
+            log(f"[ERROR] Could not download FFmpeg: {e}")
+            return False
 
-    winget_base = os.path.join(os.environ.get("LOCALAPPDATA", ""), "Microsoft", "WinGet", "Packages")
-    if os.path.isdir(winget_base):
-        for entry in os.listdir(winget_base):
-            if "ffmpeg" in entry.lower() or "FFmpeg" in entry:
-                candidate = os.path.join(winget_base, entry)
-                for root_dir, dirs, files in os.walk(candidate):
-                    for fname in files:
-                        if fname.lower() == "ffmpeg.exe":
-                            real_path = os.path.join(root_dir, fname)
-                            print(f"Found ffmpeg via WinGet: {real_path}")
-                            return real_path
+        extract_dir = os.path.join(tmp, "extracted")
+        os.makedirs(extract_dir, exist_ok=True)
 
-    return ffmpeg_path
+        if info["extract"] == "zip":
+            with zipfile.ZipFile(archive_path, "r") as zf:
+                zf.extractall(extract_dir)
+        elif info["extract"] == "tarxz":
+            with tarfile.open(archive_path, "r:xz") as tf:
+                tf.extractall(extract_dir)
 
-def main():
-    root_dir = os.path.dirname(os.path.abspath(__file__))
-    backend_dir = os.path.join(root_dir, "backend")
-    frontend_dir = os.path.join(root_dir, "frontend")
-    bin_dir = os.path.join(frontend_dir, "bin")
+        found = info["bin_path"](extract_dir)
+        if not found:
+            log("[ERROR] Could not locate ffmpeg binary inside the downloaded archive.")
+            return False
 
-    dist_electron_dir = os.path.join(frontend_dir, "dist-electron")
-    if os.path.exists(dist_electron_dir):
-        log("Cleaning previous dist-electron directory to avoid EPERM file locks...")
-        import time
-        for i in range(5):
-            try:
-                shutil.rmtree(dist_electron_dir)
-                log("Successfully cleared previous build directory.")
-                break
-            except Exception as e:
-                log(f"Attempt {i+1} to clean directory failed: {e}. Retrying in 2s...")
-                time.sleep(2)
+        shutil.copy2(found, dest_path)
+        if sys.platform != "win32":
+            os.chmod(dest_path, 0o755)
 
-    os.makedirs(bin_dir, exist_ok=True)
+    size_mb = os.path.getsize(dest_path) / (1024 * 1024)
+    log(f"FFmpeg downloaded successfully ({size_mb:.1f} MB) → {dest_path}")
+    return True
 
-    log("Checking & Installing PyInstaller inside backend venv...")
-    python_exe = os.path.join(backend_dir, "venv", "Scripts", "python.exe") if sys.platform == "win32" else os.path.join(backend_dir, "venv", "bin", "python")
 
-    subprocess.run([python_exe, "-m", "pip", "install", "pyinstaller"], check=True)
+def download_ytdlp(bin_dir):
+    """Download the latest standalone yt-dlp binary for the current platform."""
+    plat = sys.platform
 
-    log("Compiling backend main.py into standalone sidecar...")
-    pyinstaller_exe = os.path.join(backend_dir, "venv", "Scripts", "pyinstaller.exe") if sys.platform == "win32" else os.path.join(backend_dir, "venv", "bin", "pyinstaller")
+    if plat == "win32":
+        url = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe"
+        dest_name = "yt-dlp.exe"
+    elif plat == "darwin":
+        url = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos"
+        dest_name = "yt-dlp"
+    else:
+        url = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp"
+        dest_name = "yt-dlp"
 
-    backend_name = "backend"
+    dest_path = os.path.join(bin_dir, dest_name)
+
+    log(f"Downloading latest yt-dlp binary…")
+    try:
+        urllib.request.urlretrieve(url, dest_path)
+        if sys.platform != "win32":
+            os.chmod(dest_path, 0o755)
+        size_mb = os.path.getsize(dest_path) / (1024 * 1024)
+        log(f"yt-dlp downloaded successfully ({size_mb:.1f} MB) → {dest_path}")
+        return True
+    except Exception as e:
+        log(f"[ERROR] Failed to download yt-dlp: {e}")
+        return False
+
+
+def compile_backend(backend_dir, bin_dir):
+    """Compile backend/main.py into a standalone sidecar binary using PyInstaller."""
+    if sys.platform == "win32":
+        python_exe = os.path.join(backend_dir, "venv", "Scripts", "python.exe")
+        pyinstaller_exe = os.path.join(backend_dir, "venv", "Scripts", "pyinstaller.exe")
+        backend_name = "backend"
+    else:
+        python_exe = os.path.join(backend_dir, "venv", "bin", "python")
+        pyinstaller_exe = os.path.join(backend_dir, "venv", "bin", "pyinstaller")
+        backend_name = "backend"
+
+    log("Installing / upgrading PyInstaller in backend venv…")
+    subprocess.run([python_exe, "-m", "pip", "install", "--upgrade", "pyinstaller"], check=True)
+
+    log("Compiling backend main.py into standalone sidecar binary…")
     subprocess.run([
         pyinstaller_exe,
         "--onefile",
@@ -82,47 +155,65 @@ def main():
         os.path.join(backend_dir, "main.py")
     ], check=True)
 
-    log("Locating and copying FFmpeg...")
-    ffmpeg_source = get_real_ffmpeg_path()
-    if ffmpeg_source:
-        log(f"Found FFmpeg at {ffmpeg_source}, copying to packaged bin...")
-        ffmpeg_dest = os.path.join(bin_dir, "ffmpeg.exe" if sys.platform == "win32" else "ffmpeg")
-        shutil.copy2(ffmpeg_source, ffmpeg_dest)
-        if sys.platform != "win32":
-            os.chmod(ffmpeg_dest, 0o755)
-    else:
-        log("[WARNING] FFmpeg was not found on your system path. Please download it and copy it to frontend/bin/ manually.")
+    binary = os.path.join(bin_dir, backend_name + (".exe" if sys.platform == "win32" else ""))
+    if sys.platform != "win32":
+        os.chmod(binary, 0o755)
 
-    log("Downloading latest standalone yt-dlp binary...")
-    ytdlp_url = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe"
-    if sys.platform == "darwin":
-        ytdlp_url = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos"
-    elif sys.platform == "linux":
-        ytdlp_url = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp"
+    log(f"Backend compiled → {binary}")
 
-    ytdlp_dest = os.path.join(bin_dir, "yt-dlp.exe" if sys.platform == "win32" else "yt-dlp")
-    try:
-        urllib.request.urlretrieve(ytdlp_url, ytdlp_dest)
-        if sys.platform != "win32":
-            os.chmod(ytdlp_dest, 0o755)
-        log("Successfully downloaded yt-dlp sidecar binary!")
-    except Exception as e:
-        log(f"[ERROR] Failed to download yt-dlp binary: {e}")
+
+def main():
+    root_dir = os.path.dirname(os.path.abspath(__file__))
+    backend_dir = os.path.join(root_dir, "backend")
+    frontend_dir = os.path.join(root_dir, "frontend")
+    bin_dir = os.path.join(frontend_dir, "bin")
+
+    # ── Clean previous Electron build to avoid EPERM file-lock issues ─────────
+    dist_electron_dir = os.path.join(frontend_dir, "dist-electron")
+    if os.path.exists(dist_electron_dir):
+        log("Cleaning previous dist-electron directory…")
+        import time
+        for i in range(5):
+            try:
+                shutil.rmtree(dist_electron_dir)
+                log("Cleared previous build directory.")
+                break
+            except Exception as e:
+                log(f"Attempt {i+1} to clean failed: {e}. Retrying in 2s…")
+                time.sleep(2)
+
+    os.makedirs(bin_dir, exist_ok=True)
+
+    # ── Step 1: Compile Python backend sidecar ────────────────────────────────
+    compile_backend(backend_dir, bin_dir)
+
+    # ── Step 2: Bundle FFmpeg (auto-downloaded static binary) ─────────────────
+    log("Bundling FFmpeg static binary…")
+    if not download_ffmpeg(bin_dir):
+        log("[WARNING] FFmpeg was not bundled. Video trimming will NOT work in the packaged app.")
+        log("You can manually copy ffmpeg.exe / ffmpeg into frontend/bin/ and re-run package.py.")
+
+    # ── Step 3: Bundle yt-dlp sidecar binary ──────────────────────────────────
+    log("Bundling yt-dlp binary…")
+    if not download_ytdlp(bin_dir):
+        log("[ERROR] yt-dlp download failed. Cannot build a working package.")
         sys.exit(1)
 
-    log("Compiling React frontend bundle...")
+    # ── Step 4: Build React frontend bundle ───────────────────────────────────
+    log("Compiling React frontend bundle…")
     shell_val = sys.platform == "win32"
     subprocess.run(["npm", "run", "build"], cwd=frontend_dir, shell=shell_val, check=True)
 
-    import tempfile
+    # ── Step 5: Package with Electron Builder ─────────────────────────────────
     temp_build_dir = os.path.join(tempfile.gettempdir(), "fast-video-downloader-build")
-    log(f"Packaging Electron app to temporary folder to avoid EPERM locks: {temp_build_dir}")
+    log(f"Packaging Electron app → {temp_build_dir}")
 
     subprocess.run([
         "npx", "electron-builder", "build",
         f"-c.directories.output={temp_build_dir}"
     ], cwd=frontend_dir, shell=shell_val, check=True)
 
+    # ── Step 6: Copy installer(s) to release/ ─────────────────────────────────
     release_dir = os.path.join(root_dir, "release")
     if os.path.exists(release_dir):
         try:
@@ -131,7 +222,7 @@ def main():
             pass
     os.makedirs(release_dir, exist_ok=True)
 
-    log(f"Copying final installer builds to workspace 'release/' folder...")
+    log("Copying final installer to release/ …")
     copied_count = 0
     for filename in os.listdir(temp_build_dir):
         src_file = os.path.join(temp_build_dir, filename)
@@ -141,9 +232,10 @@ def main():
             copied_count += 1
 
     if copied_count > 0:
-        log(f"SUCCESS! Standalone installers are available inside root 'release/' folder!")
+        log(f"SUCCESS! {copied_count} installer(s) available in release/")
     else:
-        log("[WARNING] No installers were copied. Please verify electron-builder execution logs.")
+        log("[WARNING] No installers were copied — check electron-builder logs above.")
+
 
 if __name__ == "__main__":
     main()

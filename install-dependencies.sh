@@ -1,54 +1,100 @@
 #!/bin/bash
-set -e
+# Fast Video Downloader — Dependency Installer (macOS / Linux)
+set -euo pipefail
 
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
 echo "=================================================="
-echo "Analyzing System Dependencies..."
+echo " Fast Video Downloader — Dependency Installer"
 echo "=================================================="
+echo ""
 
-# Check Python3
+# -------------------------------------------------------
+# 1. Check Python 3
+# -------------------------------------------------------
 if ! command -v python3 &> /dev/null; then
-    echo "[ERROR] Python 3 is missing!"
-    echo "Please install Python 3.10+ using your package manager (brew install python on macOS, or apt install python3 on Ubuntu)."
+    echo "[ERROR] Python 3 is not installed!"
+    echo ""
+    echo "  macOS:  brew install python"
+    echo "  Ubuntu: sudo apt install python3 python3-venv python3-pip"
+    echo "  Fedora: sudo dnf install python3"
+    echo ""
     exit 1
 fi
-echo "[OK] Python 3 is installed."
+PYTHON_VERSION=$(python3 --version 2>&1)
+echo "[OK] $PYTHON_VERSION is installed."
 
-# Check Node/NPM
+# -------------------------------------------------------
+# 2. Check Node.js / npm
+# -------------------------------------------------------
 if ! command -v npm &> /dev/null; then
-    echo "[ERROR] Node.js / npm is missing!"
-    echo "Please install Node.js (brew install node on macOS, or apt install nodejs on Ubuntu)."
+    echo "[ERROR] Node.js / npm is not installed!"
+    echo ""
+    echo "  macOS:  brew install node"
+    echo "  Ubuntu: sudo apt install nodejs npm"
+    echo "  Or visit https://nodejs.org/"
+    echo ""
     exit 1
 fi
-echo "[OK] Node.js / npm is installed."
+NODE_VERSION=$(node --version 2>&1)
+echo "[OK] Node.js $NODE_VERSION is installed."
 
-# Check FFmpeg
+# -------------------------------------------------------
+# 3. Check FFmpeg (WARNING only — not a hard requirement for dev mode)
+# -------------------------------------------------------
 if ! command -v ffmpeg &> /dev/null; then
-    echo "[ERROR] FFmpeg is missing!"
-    echo "Fast Video Downloader requires FFmpeg to merge video/audio streams and trim sections."
-    echo "Please install FFmpeg (brew install ffmpeg on macOS, or apt install ffmpeg on Ubuntu)."
-    exit 1
+    echo ""
+    echo "[WARN] FFmpeg is not found in PATH."
+    echo "       The app will still run, but video trimming (custom range)"
+    echo "       will not work without FFmpeg."
+    echo "  macOS:  brew install ffmpeg"
+    echo "  Ubuntu: sudo apt install ffmpeg"
+    echo "  Or see: https://ffmpeg.org/download.html"
+    echo ""
+else
+    echo "[OK] FFmpeg is installed."
 fi
-echo "[OK] FFmpeg is installed."
 
+# -------------------------------------------------------
+# 4. Install Backend Python packages
+# -------------------------------------------------------
+echo ""
 echo "=================================================="
-echo "Installing Backend Virtual Environment & Packages..."
+echo " Installing Backend Virtual Environment & Packages"
 echo "=================================================="
+
 if [ ! -d "$DIR/backend/venv" ]; then
-    echo "Creating virtual environment in backend/venv..."
+    echo "Creating Python virtual environment in backend/venv..."
     python3 -m venv "$DIR/backend/venv"
+    echo "[OK] Virtual environment created."
+else
+    echo "[OK] Virtual environment already exists."
 fi
-echo "Upgrading pip and installing python packages..."
-"$DIR/backend/venv/bin/pip" install --upgrade pip
-"$DIR/backend/venv/bin/pip" install -r "$DIR/backend/requirements.txt"
 
+echo "Upgrading pip..."
+"$DIR/backend/venv/bin/pip" install --upgrade pip --quiet
+
+echo "Installing Python packages from requirements.txt..."
+"$DIR/backend/venv/bin/pip" install -r "$DIR/backend/requirements.txt"
+echo "[OK] Python packages installed."
+
+# -------------------------------------------------------
+# 5. Install Frontend Node packages
+# -------------------------------------------------------
+echo ""
 echo "=================================================="
-echo "Installing Frontend Packages..."
+echo " Installing Frontend Node.js Packages"
 echo "=================================================="
+
 cd "$DIR/frontend"
 npm install
+echo "[OK] Node packages installed."
 
+# -------------------------------------------------------
+# Done
+# -------------------------------------------------------
+echo ""
 echo "=================================================="
-echo "[SUCCESS] All dependencies have been installed successfully!"
+echo " [SUCCESS] All dependencies installed successfully!"
 echo "=================================================="
+echo ""

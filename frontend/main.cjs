@@ -1,6 +1,7 @@
 const { app, BrowserWindow, shell } = require('electron');
 const path = require('path');
 const { spawn } = require('child_process');
+const http = require('http');
 
 let mainWindow;
 let backendProcess = null;
@@ -17,6 +18,7 @@ function startBackend() {
   console.log(`Spawning sidecar backend at: ${backendPath}`);
   backendProcess = spawn(backendPath, [], {
     cwd: path.join(process.resourcesPath, 'bin'),
+    windowsHide: true,
   });
 
   backendProcess.stdout.on('data', (data) => {
@@ -25,6 +27,49 @@ function startBackend() {
 
   backendProcess.stderr.on('data', (data) => {
     console.error(`Backend Error: ${data}`);
+  });
+
+  backendProcess.on('error', (err) => {
+    console.error(`Backend failed to start: ${err.message}`);
+  });
+}
+
+function waitForBackend(timeoutMs = 30000, intervalMs = 500) {
+  return new Promise((resolve) => {
+    if (!app.isPackaged) {
+      return resolve();
+    }
+
+    const startTime = Date.now();
+
+    function poll() {
+      const req = http.request(
+        { hostname: '127.0.0.1', port: 8000, path: '/health', method: 'GET', timeout: intervalMs },
+        (res) => {
+          if (res.statusCode === 200) {
+            console.log('Backend is ready!');
+            resolve();
+          } else {
+            retry();
+          }
+          res.resume();
+        }
+      );
+      req.on('error', retry);
+      req.on('timeout', () => { req.destroy(); retry(); });
+      req.end();
+    }
+
+    function retry() {
+      if (Date.now() - startTime > timeoutMs) {
+        console.warn('Backend did not start in time — opening window anyway');
+        resolve();
+        return;
+      }
+      setTimeout(poll, intervalMs);
+    }
+
+    poll();
   });
 }
 
@@ -42,6 +87,7 @@ function createWindow() {
     },
     backgroundColor: '#09090b',
     autoHideMenuBar: true,
+    show: false,
   });
 
   if (app.isPackaged) {
@@ -49,6 +95,10 @@ function createWindow() {
   } else {
     mainWindow.loadURL('http://localhost:5174');
   }
+
+  mainWindow.once('ready-to-show', () => {
+    mainWindow.show();
+  });
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url);
@@ -60,8 +110,9 @@ function createWindow() {
   });
 }
 
-app.on('ready', () => {
+app.on('ready', async () => {
   startBackend();
+  await waitForBackend(30000, 500);
   createWindow();
 });
 
