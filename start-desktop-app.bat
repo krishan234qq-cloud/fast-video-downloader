@@ -17,10 +17,10 @@ if %errorlevel% neq 0 (
 
 echo.
 echo Starting Backend API Server (port 8000)...
-start "FVD-Backend" /min cmd /c "cd /d %~dp0backend && venv\Scripts\python.exe -m uvicorn main:app --host 127.0.0.1 --port 8000"
+powershell -windowstyle hidden -Command "Start-Process venv\Scripts\python.exe -ArgumentList '-m', 'uvicorn', 'main:app', '--host', '127.0.0.1', '--port', '8000' -WorkingDirectory '%~dp0backend' -WindowStyle Hidden"
 
 echo Starting Frontend Dev Server (port 5174)...
-start "FVD-Frontend" /min cmd /c "cd /d %~dp0frontend && npm run dev"
+powershell -windowstyle hidden -Command "Start-Process npm.cmd -ArgumentList 'run', 'dev' -WorkingDirectory '%~dp0frontend' -WindowStyle Hidden"
 
 echo.
 echo Waiting for servers to initialize (10 seconds)...
@@ -33,8 +33,8 @@ call npm run app
 
 echo.
 echo Application closed. Stopping background servers...
-taskkill /f /fi "WindowTitle eq FVD-Backend*" >nul 2>nul
-taskkill /f /fi "WindowTitle eq FVD-Frontend*" >nul 2>nul
+powershell -Command "Get-NetTCPConnection -LocalPort 8000 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess | Unique | ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }"
+powershell -Command "Get-NetTCPConnection -LocalPort 5174 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess | Unique | ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }"
 
 echo Done.
 endlocal
