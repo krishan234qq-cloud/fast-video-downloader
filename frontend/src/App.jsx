@@ -140,7 +140,7 @@ export default function App() {
               setBackendOnline(true);
               break;
             }
-          } catch {}
+          } catch (_e) { void _e; }
         }
       } else if (launcherOnline) {
         const res = await fetch('http://localhost:9999/start', { method: 'POST' });
@@ -153,7 +153,7 @@ export default function App() {
                 setBackendOnline(true);
                 break;
               }
-            } catch {}
+            } catch (_e) { void _e; }
           }
         } else {
           setFetchError('Failed to trigger backend start via launcher.');
@@ -313,7 +313,7 @@ export default function App() {
               setFetchError(payload.detail || 'Download failed');
               setDownloadStateSync('error');
             }
-          } catch {}
+          } catch (_e) { void _e; }
         }
       }
 
@@ -722,7 +722,7 @@ export default function App() {
         </a>
 
         <button
-          disabled={!videoData || isFetching || isDownloadingRef.current}
+          disabled={!videoData || isFetching || downloadState === 'downloading'}
           onClick={handleDownload}
           className={`flex items-center justify-center gap-2 px-12 py-3 rounded-xl text-[13px] font-extrabold transition-all duration-200 w-full sm:w-auto ${downloadButtonClass}`}
         >
