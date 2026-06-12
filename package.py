@@ -6,6 +6,9 @@ import subprocess
 import zipfile
 import tarfile
 import tempfile
+import socket
+
+socket.setdefaulttimeout(15)
 
 def log(msg):
     print(f"\n>>> {msg}\n")
@@ -107,6 +110,23 @@ def download_ytdlp(bin_dir):
         dest_name = "yt-dlp"
 
     dest_path = os.path.join(bin_dir, dest_name)
+
+    if os.path.exists(dest_path) and os.path.getsize(dest_path) > 1000000:
+        log(f"yt-dlp already present at {dest_path}, checking for update...")
+        try:
+            urllib.request.urlretrieve(url, dest_path + ".tmp")
+            shutil.move(dest_path + ".tmp", dest_path)
+            if sys.platform != "win32":
+                os.chmod(dest_path, 0o755)
+            log("yt-dlp updated successfully.")
+            return True
+        except Exception as e:
+            log(f"[WARNING] Failed to update yt-dlp: {e}. Using existing binary.")
+            try:
+                os.remove(dest_path + ".tmp")
+            except Exception:
+                pass
+            return True
 
     log("Downloading latest yt-dlp binary...")
     try:
