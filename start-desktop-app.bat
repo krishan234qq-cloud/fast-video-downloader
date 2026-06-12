@@ -24,7 +24,7 @@ start "FVD-Frontend" /min cmd /c "cd /d %~dp0frontend && npm run dev"
 
 echo.
 echo Waiting for servers to initialize (10 seconds)...
-timeout /t 10 /nobreak > nul
+ping 127.0.0.1 -n 11 > nul
 
 echo.
 echo Launching Fast Video Downloader Desktop Application...

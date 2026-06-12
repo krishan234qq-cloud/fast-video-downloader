@@ -24,7 +24,7 @@ where npm >nul 2>nul
 if %errorlevel% neq 0 (
     echo [ERROR] Node.js / npm is not installed or not in PATH!
     echo.
-    echo Please install Node.js (LTS) from https://nodejs.org/
+    echo Please install Node.js LTS from https://nodejs.org/
     echo.
     pause
     exit /b 1
@@ -36,7 +36,7 @@ where ffmpeg >nul 2>nul
 if %errorlevel% neq 0 (
     echo.
     echo [WARN] FFmpeg is not found in PATH.
-    echo        The app will still work, but video trimming (custom range)
+    echo        The app will still work, but video trimming [custom range]
     echo        will not function without FFmpeg.
     echo        Download FFmpeg from https://ffmpeg.org/download.html
     echo        and add its "bin" folder to your system PATH.
@@ -81,7 +81,7 @@ echo  Installing Frontend Node.js Packages...
 echo ==================================================
 
 if not exist "%~dp0frontend\node_modules" (
-    echo Installing node_modules (this may take a minute)...
+    echo Installing node_modules - this may take a minute...
 ) else (
     echo Updating node_modules...
 )
