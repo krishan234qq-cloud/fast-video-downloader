@@ -5,6 +5,38 @@ const http = require('http');
 
 let mainWindow;
 let backendProcess = null;
+let backendRestartCount = 0;
+const MAX_BACKEND_RESTARTS = 5;
+
+function startBackend() {
+  if (!app.isPackaged) return;
+
+  const backendPath = path.join(
+    process.resourcesPath,
+    'bin',
+    process.platform === 'win32' ? 'backend.exe' : 'backend'
+  );
+
+  backendProcess = spawn(backendPath, [], {
+    cwd: path.join(process.resourcesPath, 'bin'),
+    windowsHide: true,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+
+  backendProcess.stdout.on('data', () => {});
+  backendProcess.stderr.on('data', () => {});
+
+  backendProcess.on('error', () => {});
+
+  backendProcess.on('exit', (code) => {
+    if (code !== 0 && backendRestartCount < MAX_BACKEND_RESTARTS) {
+      backendRestartCount += 1;
+      setTimeout(() => {
+        startBackend();
+      }, 1500);
+    }
+  });
+}
 
 ipcMain.handle('start-backend', async () => {
   if (!app.isPackaged) {
@@ -18,43 +50,19 @@ ipcMain.handle('start-backend', async () => {
     backendProcess = spawn(pythonExe, ['-m', 'uvicorn', 'main:app', '--host', '127.0.0.1', '--port', '8000'], {
       cwd: backendDir,
       windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
     });
+    backendProcess.stdout.on('data', () => {});
+    backendProcess.stderr.on('data', () => {});
     return { status: 'started' };
   }
   if (backendProcess && backendProcess.exitCode === null) {
     return { status: 'already_running' };
   }
+  backendRestartCount = 0;
   startBackend();
   return { status: 'started' };
 });
-
-function startBackend() {
-  if (!app.isPackaged) return;
-
-  const backendPath = path.join(
-    process.resourcesPath,
-    'bin',
-    process.platform === 'win32' ? 'backend.exe' : 'backend'
-  );
-
-  console.log(`Spawning sidecar backend at: ${backendPath}`);
-  backendProcess = spawn(backendPath, [], {
-    cwd: path.join(process.resourcesPath, 'bin'),
-    windowsHide: true,
-  });
-
-  backendProcess.stdout.on('data', (data) => {
-    console.log(`Backend: ${data}`);
-  });
-
-  backendProcess.stderr.on('data', (data) => {
-    console.error(`Backend Error: ${data}`);
-  });
-
-  backendProcess.on('error', (err) => {
-    console.error(`Backend failed to start: ${err.message}`);
-  });
-}
 
 function waitForBackend(timeoutMs = 30000, intervalMs = 500) {
   return new Promise((resolve) => {
@@ -69,7 +77,6 @@ function waitForBackend(timeoutMs = 30000, intervalMs = 500) {
         { hostname: '127.0.0.1', port: 8000, path: '/health', method: 'GET', timeout: intervalMs },
         (res) => {
           if (res.statusCode === 200) {
-            console.log('Backend is ready!');
             resolve();
           } else {
             retry();
@@ -84,7 +91,6 @@ function waitForBackend(timeoutMs = 30000, intervalMs = 500) {
 
     function retry() {
       if (Date.now() - startTime > timeoutMs) {
-        console.warn('Backend did not start in time — opening window anyway');
         resolve();
         return;
       }
@@ -101,11 +107,11 @@ function createWindow() {
     height: 800,
     minWidth: 768,
     minHeight: 620,
-    title: "Fast Video Downloader",
+    title: 'Fast Video Downloader',
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
-      preload: path.join(__dirname, 'preload.cjs')
+      preload: path.join(__dirname, 'preload.cjs'),
     },
     backgroundColor: '#09090b',
     autoHideMenuBar: true,
@@ -152,7 +158,6 @@ app.on('activate', function () {
 
 app.on('will-quit', () => {
   if (backendProcess) {
-    console.log('Terminating backend sidecar...');
     backendProcess.kill();
   }
 });

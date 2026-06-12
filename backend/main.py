@@ -9,14 +9,24 @@ import subprocess
 import sys
 import re
 import urllib.request
+import urllib.error
 
 app = FastAPI()
 
-IS_FROZEN = getattr(sys, 'frozen', False)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+IS_FROZEN = getattr(sys, "frozen", False)
 if IS_FROZEN:
     BASE_BIN_DIR = os.path.dirname(sys.executable)
 else:
     BASE_BIN_DIR = os.path.dirname(os.path.abspath(__file__))
+
 
 def get_ffmpeg_path():
     if IS_FROZEN:
@@ -24,6 +34,7 @@ def get_ffmpeg_path():
         if os.path.exists(p):
             return p
     return "ffmpeg"
+
 
 def get_ytdlp_command():
     if IS_FROZEN:
@@ -37,13 +48,6 @@ def get_ytdlp_command():
 async def health():
     return {"status": "ok"}
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 QUALITY_FORMAT_MAP = {
     "4k":      "bestvideo[height<=2160][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=2160]+bestaudio/best",
@@ -137,7 +141,7 @@ def extract_quality_details(formats, quality_id, duration_secs=0):
 
     width = best_video.get("width")
     height = best_video.get("height")
-    resolution = f"{width} × {height}" if width and height else "Unknown"
+    resolution = f"{width} x {height}" if width and height else "Unknown"
 
     vcodec = (best_video.get("vcodec") or "").split(".")[0].upper()
     acodec = ""
@@ -191,7 +195,7 @@ class FolderRequest(BaseModel):
 
 
 SANKAKU_POST_RE = re.compile(
-    r'(?:https?://)?(?:www\.)?sankakucomplex\.com/posts?/([A-Za-z0-9]+)',
+    r"(?:https?://)?(?:www\.)?sankakucomplex\.com/posts?/([A-Za-z0-9]+)",
     re.IGNORECASE,
 )
 
@@ -315,14 +319,33 @@ def _build_ydl_opts(browser: str = None, user_agent: str = None, force_generic: 
         "no_warnings": True,
         "extract_flat": False,
         "check_formats": False,
+        "socket_timeout": 30,
+        "retries": 5,
+        "fragment_retries": 5,
+        "http_headers": {
+            "User-Agent": user_agent or (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/124.0.0.0 Safari/537.36"
+            ),
+        },
     }
     if force_generic:
         opts["force_generic_extractor"] = True
     if browser and browser.lower() != "none":
         opts["cookiesfrombrowser"] = (browser.lower(), None, None, None)
     if user_agent:
-        opts["http_headers"] = {"User-Agent": user_agent}
+        opts["http_headers"]["User-Agent"] = user_agent
     return opts
+
+
+def _is_network_error(msg: str) -> bool:
+    lower = msg.lower()
+    return any(k in lower for k in [
+        "errno 22", "error 22", "[errno", "winapi", "connection reset",
+        "connection refused", "timed out", "timeout", "network",
+        "ssl", "certificate", "unable to connect",
+    ])
 
 
 def _extract_info_with_fallback(url: str, browser: str = None, user_agent: str = None):
@@ -334,29 +357,32 @@ def _extract_info_with_fallback(url: str, browser: str = None, user_agent: str =
             return sk_info, False
         raise Exception(
             "Sankakucomplex video requires a premium/logged-in account. "
-            "Open Settings (⚙) → Browser Cookies Sync and select the browser "
-            "where you are logged into sankakucomplex.com, then try again."
+            "Open Settings and select the browser where you are logged into sankakucomplex.com, then try again."
         )
 
-    try:
-        opts = _build_ydl_opts(browser, user_agent, force_generic=False)
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            return ydl.extract_info(url, download=False), False
-    except Exception as first_err:
-        first_msg = str(first_err)
-        is_unsupported = (
-            "unsupported url" in first_msg.lower()
-            or "no video formats found" in first_msg.lower()
-            or "unable to extract" in first_msg.lower()
-        )
-        if is_unsupported:
-            try:
-                opts = _build_ydl_opts(browser, user_agent, force_generic=True)
-                with yt_dlp.YoutubeDL(opts) as ydl:
-                    return ydl.extract_info(url, download=False), True
-            except Exception:
-                pass
-        raise first_err
+    last_error = None
+    for attempt in range(2):
+        force_generic = attempt == 1
+        try:
+            opts = _build_ydl_opts(browser, user_agent, force_generic=force_generic)
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+                return info, force_generic
+        except Exception as err:
+            err_msg = str(err)
+            is_unsupported = (
+                "unsupported url" in err_msg.lower()
+                or "no video formats found" in err_msg.lower()
+                or "unable to extract" in err_msg.lower()
+                or "this video is not available" in err_msg.lower()
+            )
+            if attempt == 0 and is_unsupported:
+                last_error = err
+                continue
+            last_error = err
+            break
+
+    raise last_error
 
 
 @app.post("/api/info")
@@ -404,6 +430,15 @@ async def get_video_info(request: InfoRequest):
                     "This website is not supported and no embedded video was found. "
                     "Try enabling Browser Cookies Sync in Settings if the page needs a login, "
                     "or paste a direct video/stream URL."
+                )
+            )
+        if _is_network_error(err_msg):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Network error while connecting to the video source. "
+                    "Check your internet connection and try again. "
+                    f"Detail: {err_msg}"
                 )
             )
         raise HTTPException(status_code=400, detail=err_msg)
@@ -464,6 +499,15 @@ async def download_video(request: DownloadRequest):
         "--no-playlist",
         "--newline",
         "--no-check-formats",
+        "--socket-timeout", "30",
+        "--retries", "5",
+        "--fragment-retries", "5",
+        "--user-agent",
+        request.user_agent or (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        ),
         "-N", str(request.concurrent_downloads),
     ]
 
@@ -472,8 +516,6 @@ async def download_video(request: DownloadRequest):
 
     if request.browser and request.browser.lower() != "none":
         cmd += ["--cookies-from-browser", request.browser.lower()]
-    if request.user_agent:
-        cmd += ["--user-agent", request.user_agent]
 
     if is_audio:
         cmd += ["--extract-audio", "--audio-format", "mp3"]
@@ -486,8 +528,11 @@ async def download_video(request: DownloadRequest):
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
+                stdin=subprocess.DEVNULL,
                 text=True,
                 bufsize=1,
+                encoding="utf-8",
+                errors="replace",
             )
             final_file = None
             has_lock_error = False
@@ -495,7 +540,8 @@ async def download_video(request: DownloadRequest):
                 line = line.strip()
                 if line:
                     yield f"data: {json.dumps({'log': line})}\n\n"
-                    if "locked" in line.lower() or "permission denied" in line.lower() or ("cookie" in line.lower() and "lock" in line.lower()):
+                    lower_line = line.lower()
+                    if "locked" in lower_line or "permission denied" in lower_line or ("cookie" in lower_line and "lock" in lower_line):
                         has_lock_error = True
                     if "[download] Destination:" in line:
                         final_file = line.split("[download] Destination:")[1].strip()
@@ -503,14 +549,14 @@ async def download_video(request: DownloadRequest):
                         parts = line.split("has already been downloaded")[0].replace("[download]", "").strip()
                         final_file = parts
                     elif "[Merger] Merging formats into" in line:
-                        final_file = line.split("[Merger] Merging formats into")[1].replace('"', '').strip()
+                        final_file = line.split("[Merger] Merging formats into")[1].replace('"', "").strip()
 
             proc.wait()
             if proc.returncode == 0:
                 if request.download_type == "custom":
                     temp_files = [
                         os.path.join(save_dir, f) for f in os.listdir(save_dir)
-                        if ".temp." in f and f.lower().endswith(('.mp4', '.mkv', '.webm', '.mp3', '.m4a'))
+                        if ".temp." in f and f.lower().endswith((".mp4", ".mkv", ".webm", ".mp3", ".m4a"))
                     ]
                     if temp_files:
                         final_file = max(temp_files, key=os.path.getmtime)
@@ -534,7 +580,10 @@ async def download_video(request: DownloadRequest):
                             trim_cmd,
                             stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE,
-                            text=True
+                            stdin=subprocess.DEVNULL,
+                            text=True,
+                            encoding="utf-8",
+                            errors="replace",
                         )
 
                         if trim_proc.returncode == 0:

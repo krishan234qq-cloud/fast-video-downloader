@@ -75,6 +75,8 @@ export default function App() {
   const [launcherOnline, setLauncherOnline] = useState(null);
   const [isStartingBackend, setIsStartingBackend] = useState(false);
   const abortRef = useRef(null);
+  const isDownloadingRef = useRef(false);
+  const downloadStateRef = useRef('idle');
 
   const [showSettings, setShowSettings] = useState(false);
   const [selectedBrowser, setSelectedBrowser] = useState(() => localStorage.getItem('selected_browser') || 'none');
@@ -95,6 +97,11 @@ export default function App() {
   const updateConcurrentDownloads = (n) => {
     setConcurrentDownloads(n);
     localStorage.setItem('concurrent_downloads', String(n));
+  };
+
+  const setDownloadStateSync = (state) => {
+    downloadStateRef.current = state;
+    setDownloadState(state);
   };
 
   useEffect(() => {
@@ -125,28 +132,28 @@ export default function App() {
     try {
       if (window.electron && window.electron.isElectron) {
         await window.electron.startBackend();
-        for (let i = 0; i < 6; i++) {
-          await new Promise(r => setTimeout(r, 600));
+        for (let i = 0; i < 10; i++) {
+          await new Promise(r => setTimeout(r, 800));
           try {
-            const r = await fetch(`${API}/health`, { signal: AbortSignal.timeout(600) });
+            const r = await fetch(`${API}/health`, { signal: AbortSignal.timeout(800) });
             if (r.ok) {
               setBackendOnline(true);
               break;
             }
-          } catch { /* polling — ignore failures */ }
+          } catch {}
         }
       } else if (launcherOnline) {
         const res = await fetch('http://localhost:9999/start', { method: 'POST' });
         if (res.ok) {
-          for (let i = 0; i < 6; i++) {
-            await new Promise(r => setTimeout(r, 600));
+          for (let i = 0; i < 10; i++) {
+            await new Promise(r => setTimeout(r, 800));
             try {
-              const r = await fetch(`${API}/health`, { signal: AbortSignal.timeout(600) });
+              const r = await fetch(`${API}/health`, { signal: AbortSignal.timeout(800) });
               if (r.ok) {
                 setBackendOnline(true);
                 break;
               }
-            } catch { /* polling — ignore failures */ }
+            } catch {}
           }
         } else {
           setFetchError('Failed to trigger backend start via launcher.');
@@ -184,20 +191,30 @@ export default function App() {
   };
 
   const handleClear = () => {
+    if (abortRef.current) {
+      abortRef.current.abort();
+      abortRef.current = null;
+    }
+    isDownloadingRef.current = false;
     setUrl('');
     setVideoData(null);
     setFetchError('');
-    setDownloadState('idle');
+    setDownloadStateSync('idle');
     setDownloadLog([]);
     setDownloadProgress(0);
   };
 
   const handleFetch = async () => {
     if (!url.trim()) return;
+    if (abortRef.current) {
+      abortRef.current.abort();
+      abortRef.current = null;
+    }
+    isDownloadingRef.current = false;
     setIsFetching(true);
     setVideoData(null);
     setFetchError('');
-    setDownloadState('idle');
+    setDownloadStateSync('idle');
     setDownloadLog([]);
     setDownloadProgress(0);
     try {
@@ -237,13 +254,17 @@ export default function App() {
   };
 
   const handleDownload = async () => {
-    if (!videoData || downloadState === 'downloading') return;
-    setDownloadState('downloading');
+    if (!videoData || isDownloadingRef.current) return;
+
+    isDownloadingRef.current = true;
+    setDownloadStateSync('downloading');
     setDownloadLog([]);
     setDownloadProgress(0);
+    setFetchError('');
 
     const effectiveSaveDir = saveDir || '';
-    abortRef.current = new AbortController();
+    const controller = new AbortController();
+    abortRef.current = controller;
 
     try {
       const res = await fetch(`${API}/api/download`, {
@@ -260,12 +281,13 @@ export default function App() {
           user_agent: customUserAgent,
           concurrent_downloads: concurrentDownloads,
         }),
-        signal: abortRef.current.signal,
+        signal: controller.signal,
       });
 
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
+      let encounteredError = false;
 
       while (true) {
         const { done, value } = await reader.read();
@@ -282,20 +304,32 @@ export default function App() {
               const match = payload.log.match(/(\d+\.?\d*)%/);
               if (match) setDownloadProgress(parseFloat(match[1]));
             }
-            if (payload.status === 'done') setDownloadState('done');
-            if (payload.status === 'error') {
-              setFetchError(payload.detail || 'Download failed');
-              setDownloadState('error');
+            if (payload.status === 'done') {
+              encounteredError = false;
+              setDownloadStateSync('done');
             }
-          } catch { /* skip malformed SSE lines */ }
+            if (payload.status === 'error') {
+              encounteredError = true;
+              setFetchError(payload.detail || 'Download failed');
+              setDownloadStateSync('error');
+            }
+          } catch {}
         }
       }
-      if (downloadState !== 'error') setDownloadState('done');
+
+      if (!encounteredError && downloadStateRef.current !== 'done' && downloadStateRef.current !== 'error') {
+        setDownloadStateSync('done');
+      }
     } catch (e) {
       if (e.name !== 'AbortError') {
         setFetchError(e.message || 'Download failed');
-        setDownloadState('error');
+        setDownloadStateSync('error');
+      } else {
+        setDownloadStateSync('idle');
       }
+    } finally {
+      isDownloadingRef.current = false;
+      abortRef.current = null;
     }
   };
 
@@ -688,7 +722,7 @@ export default function App() {
         </a>
 
         <button
-          disabled={!videoData || isFetching || downloadState === 'downloading'}
+          disabled={!videoData || isFetching || isDownloadingRef.current}
           onClick={handleDownload}
           className={`flex items-center justify-center gap-2 px-12 py-3 rounded-xl text-[13px] font-extrabold transition-all duration-200 w-full sm:w-auto ${downloadButtonClass}`}
         >
