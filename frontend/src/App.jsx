@@ -418,7 +418,7 @@ export default function App() {
                 value={url}
                 onChange={(e) => { setUrl(e.target.value); setFetchError(''); }}
                 onKeyDown={(e) => e.key === 'Enter' && handleFetch()}
-                placeholder="Paste video or audio link here (e.g. YouTube, Vimeo, Twitter)..."
+                placeholder="Paste video or audio link here (e.g. YouTube, Vimeo, Gogoanime, Zoro, 9anime)..."
                 className="flex-1 bg-transparent text-[13px] text-zinc-200 placeholder-zinc-650 outline-none w-full min-w-0"
               />
               {fetchError && (
@@ -718,7 +718,7 @@ export default function App() {
           rel="noopener noreferrer"
           className="hidden sm:block text-[10px] text-zinc-500 hover:text-indigo-400 transition-colors duration-200 tracking-wide font-medium"
         >
-          Made by NioKrishan
+          Made by NikoKrishan
         </a>
 
         <button

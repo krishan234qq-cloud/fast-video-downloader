@@ -64,6 +64,18 @@ QUALITY_FORMAT_MAP = {
     "audio":   "bestaudio[ext=m4a]/bestaudio",
 }
 
+ANIME_DOMAINS = [
+    "9anime", "zoro.to", "aniwatch", "gogoanime", "animepahe",
+    "animekisa", "4anime", "animesuge", "animefreak", "kickassanime",
+    "animehub", "animeheaven", "animeultima", "animixplay", "crunchyroll",
+    "funimation", "hidive",
+]
+
+
+def is_anime_url(url: str) -> bool:
+    lower = url.lower()
+    return any(domain in lower for domain in ANIME_DOMAINS)
+
 
 def seconds_to_hhmmss(seconds: int) -> str:
     h = seconds // 3600
@@ -339,6 +351,31 @@ def _build_ydl_opts(browser: str = None, user_agent: str = None, force_generic: 
     return opts
 
 
+def _build_anime_ydl_opts(browser: str = None, user_agent: str = None) -> dict:
+    ua = user_agent or (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    )
+    opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "extract_flat": False,
+        "check_formats": False,
+        "socket_timeout": 45,
+        "retries": 8,
+        "fragment_retries": 8,
+        "http_headers": {
+            "User-Agent": ua,
+            "Referer": "",
+            "Origin": "",
+        },
+    }
+    if browser and browser.lower() != "none":
+        opts["cookiesfrombrowser"] = (browser.lower(), None, None, None)
+    return opts
+
+
 def _is_network_error(msg: str) -> bool:
     lower = msg.lower()
     return any(k in lower for k in [
@@ -359,6 +396,15 @@ def _extract_info_with_fallback(url: str, browser: str = None, user_agent: str =
             "Sankakucomplex video requires a premium/logged-in account. "
             "Open Settings and select the browser where you are logged into sankakucomplex.com, then try again."
         )
+
+    if is_anime_url(url):
+        try:
+            opts = _build_anime_ydl_opts(browser, user_agent)
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+                return info, False
+        except Exception as anime_err:
+            pass
 
     last_error = None
     for attempt in range(2):
@@ -383,6 +429,43 @@ def _extract_info_with_fallback(url: str, browser: str = None, user_agent: str =
             break
 
     raise last_error
+
+
+def _reencode_to_universal(input_path: str, output_path: str, ffmpeg_path: str, is_audio: bool = False) -> tuple[bool, str]:
+    if is_audio:
+        cmd = [
+            ffmpeg_path, "-y",
+            "-i", input_path,
+            "-vn",
+            "-acodec", "libmp3lame",
+            "-q:a", "2",
+            output_path,
+        ]
+    else:
+        cmd = [
+            ffmpeg_path, "-y",
+            "-i", input_path,
+            "-vcodec", "libx264",
+            "-crf", "18",
+            "-preset", "fast",
+            "-profile:v", "high",
+            "-level", "4.1",
+            "-pix_fmt", "yuv420p",
+            "-acodec", "aac",
+            "-b:a", "192k",
+            "-movflags", "+faststart",
+            output_path,
+        ]
+    result = subprocess.run(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        stdin=subprocess.DEVNULL,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    return result.returncode == 0, result.stderr
 
 
 @app.post("/api/info")
@@ -453,15 +536,12 @@ async def download_video(request: DownloadRequest):
     if not save_dir:
         save_dir = os.path.join(os.path.expanduser("~"), "Downloads")
     os.makedirs(save_dir, exist_ok=True)
-    out_template = os.path.join(save_dir, "%(title)s.%(ext)s")
 
-    if request.download_type == "custom":
-        out_template_for_ytdl = os.path.join(save_dir, "%(title)s.temp.%(ext)s")
-    else:
-        out_template_for_ytdl = out_template
+    out_template = os.path.join(save_dir, "%(title)s.raw.%(ext)s")
 
     download_url = request.url
     needs_generic = False
+    is_anime = is_anime_url(request.url)
 
     sk_match = SANKAKU_POST_RE.search(request.url)
     if sk_match:
@@ -469,16 +549,14 @@ async def download_video(request: DownloadRequest):
         sk_info = _sankakucomplex_extract(post_id, request.browser)
         if sk_info and sk_info.get("url"):
             download_url = sk_info["url"]
-            out_template_for_ytdl = os.path.join(
-                save_dir,
-                f"sankaku_{post_id}.%(ext)s" if request.download_type != "custom"
-                else f"sankaku_{post_id}.temp.%(ext)s"
-            )
+            out_template = os.path.join(save_dir, f"sankaku_{post_id}.raw.%(ext)s")
         else:
             def _err_stream():
-                yield f"data: {json.dumps({'log': '[sankaku] ERROR: Could not resolve video URL. Make sure you are logged in and have selected the correct browser in Settings.'})}\\n\\n"
-                yield f"data: {json.dumps({'status': 'error', 'detail': 'Sankakucomplex video could not be resolved. Enable Browser Cookies Sync in Settings.'})}\\n\\n"
+                yield f"data: {json.dumps({'log': '[sankaku] ERROR: Could not resolve video URL. Make sure you are logged in and have selected the correct browser in Settings.'})}\n\n"
+                yield f"data: {json.dumps({'status': 'error', 'detail': 'Sankakucomplex video could not be resolved. Enable Browser Cookies Sync in Settings.'})}\n\n"
             return StreamingResponse(_err_stream(), media_type="text/event-stream")
+    elif is_anime:
+        pass
     else:
         try:
             probe_opts = _build_ydl_opts(request.browser, request.user_agent, force_generic=False)
@@ -493,17 +571,36 @@ async def download_video(request: DownloadRequest):
             ):
                 needs_generic = True
 
-    cmd = get_ytdlp_command() + [
-        "--format", fmt,
-        "--output", out_template_for_ytdl,
-        "--no-playlist",
-        "--newline",
-        "--no-check-formats",
-        "--socket-timeout", "30",
-        "--retries", "5",
-        "--fragment-retries", "5",
-        "-N", str(request.concurrent_downloads),
-    ]
+    if is_anime:
+        ua = request.user_agent or (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        )
+        cmd = get_ytdlp_command() + [
+            "--format", fmt,
+            "--output", out_template,
+            "--no-playlist",
+            "--newline",
+            "--no-check-formats",
+            "--socket-timeout", "45",
+            "--retries", "8",
+            "--fragment-retries", "8",
+            "-N", str(request.concurrent_downloads),
+            "--user-agent", ua,
+        ]
+    else:
+        cmd = get_ytdlp_command() + [
+            "--format", fmt,
+            "--output", out_template,
+            "--no-playlist",
+            "--newline",
+            "--no-check-formats",
+            "--socket-timeout", "30",
+            "--retries", "5",
+            "--fragment-retries", "5",
+            "-N", str(request.concurrent_downloads),
+        ]
 
     if needs_generic:
         cmd.append("--force-generic-extractor")
@@ -511,11 +608,8 @@ async def download_video(request: DownloadRequest):
     if request.browser and request.browser.lower() != "none":
         cmd += ["--cookies-from-browser", request.browser.lower()]
 
-    if request.user_agent:
+    if request.user_agent and not is_anime:
         cmd += ["--user-agent", request.user_agent]
-
-    if is_audio:
-        cmd += ["--extract-audio", "--audio-format", "mp3"]
 
     cmd.append(download_url)
 
@@ -533,7 +627,7 @@ async def download_video(request: DownloadRequest):
                 encoding="utf-8",
                 errors="replace",
             )
-            final_file = None
+            raw_file = None
             has_lock_error = False
             for line in proc.stdout:
                 line = line.strip()
@@ -543,66 +637,87 @@ async def download_video(request: DownloadRequest):
                     if "locked" in lower_line or "permission denied" in lower_line or ("cookie" in lower_line and "lock" in lower_line):
                         has_lock_error = True
                     if "[download] Destination:" in line:
-                        final_file = line.split("[download] Destination:")[1].strip()
+                        raw_file = line.split("[download] Destination:")[1].strip()
                     elif "has already been downloaded" in line and "[download]" in line:
                         parts = line.split("has already been downloaded")[0].replace("[download]", "").strip()
-                        final_file = parts
+                        raw_file = parts
                     elif "[Merger] Merging formats into" in line:
-                        final_file = line.split("[Merger] Merging formats into")[1].replace('"', "").strip()
+                        raw_file = line.split("[Merger] Merging formats into")[1].replace('"', "").strip()
 
             proc.wait()
-            if proc.returncode == 0:
-                if request.download_type == "custom":
-                    temp_files = [
-                        os.path.join(save_dir, f) for f in os.listdir(save_dir)
-                        if ".temp." in f and f.lower().endswith((".mp4", ".mkv", ".webm", ".mp3", ".m4a"))
-                    ]
-                    if temp_files:
-                        final_file = max(temp_files, key=os.path.getmtime)
-
-                    if final_file:
-                        yield f"data: {json.dumps({'log': f'[trim] Found temporary download at {final_file}'})}\n\n"
-                        yield f"data: {json.dumps({'log': '[trim] Trimming requested section locally...'})}\n\n"
-
-                        actual_final_file = final_file.replace(".temp.", ".")
-
-                        trim_cmd = [
-                            get_ffmpeg_path(), "-y",
-                            "-ss", request.start_time,
-                            "-to", request.end_time,
-                            "-i", final_file,
-                            "-c", "copy",
-                            actual_final_file
-                        ]
-
-                        trim_proc = subprocess.run(
-                            trim_cmd,
-                            stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE,
-                            stdin=subprocess.DEVNULL,
-                            text=True,
-                            encoding="utf-8",
-                            errors="replace",
-                        )
-
-                        if trim_proc.returncode == 0:
-                            try:
-                                os.remove(final_file)
-                            except Exception:
-                                pass
-                            yield f"data: {json.dumps({'log': f'[trim] Successfully trimmed section to {actual_final_file}'})}\n\n"
-                            yield f"data: {json.dumps({'status': 'done'})}\n\n"
-                        else:
-                            yield f"data: {json.dumps({'status': 'error', 'detail': f'FFmpeg trim failed: {trim_proc.stderr}'})}\n\n"
-                    else:
-                        yield f"data: {json.dumps({'status': 'error', 'detail': 'Temporary download file not found on disk'})}\n\n"
-                else:
-                    yield f"data: {json.dumps({'status': 'done'})}\n\n"
-            else:
+            if proc.returncode != 0:
                 detail = "yt-dlp exited with an error"
                 if has_lock_error:
                     detail = f"Cookies extraction failed because the database is locked. Please close your {request.browser} browser and try again."
                 yield f"data: {json.dumps({'status': 'error', 'detail': detail})}\n\n"
+                return
+
+            raw_files = [
+                os.path.join(save_dir, f) for f in os.listdir(save_dir)
+                if ".raw." in f and f.lower().endswith((".mp4", ".mkv", ".webm", ".m4a", ".mp3", ".flac", ".ogg", ".ts", ".avi"))
+            ]
+            if raw_files:
+                raw_file = max(raw_files, key=os.path.getmtime)
+
+            if not raw_file or not os.path.exists(raw_file):
+                yield f"data: {json.dumps({'status': 'error', 'detail': 'Downloaded file not found on disk'})}\n\n"
+                return
+
+            if request.download_type == "custom":
+                yield f"data: {json.dumps({'log': '[trim] Trimming requested section...'})}\n\n"
+                trimmed_raw = raw_file.replace(".raw.", ".trimmed_raw.")
+                trim_cmd = [
+                    get_ffmpeg_path(), "-y",
+                    "-ss", request.start_time,
+                    "-to", request.end_time,
+                    "-i", raw_file,
+                    "-c", "copy",
+                    trimmed_raw,
+                ]
+                trim_result = subprocess.run(
+                    trim_cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    stdin=subprocess.DEVNULL,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                )
+                if trim_result.returncode != 0:
+                    yield f"data: {json.dumps({'status': 'error', 'detail': f'FFmpeg trim failed: {trim_result.stderr}'})}\n\n"
+                    return
+                try:
+                    os.remove(raw_file)
+                except Exception:
+                    pass
+                raw_file = trimmed_raw
+
+            yield f"data: {json.dumps({'log': '[encode] Re-encoding to universal H.264/AAC format for maximum compatibility...'})}\n\n"
+
+            base_name = os.path.basename(raw_file)
+            for suffix in (".raw.", ".trimmed_raw."):
+                base_name = base_name.replace(suffix, ".")
+            if is_audio:
+                ext = ".mp3"
+                name_no_ext = os.path.splitext(base_name)[0]
+                final_file = os.path.join(save_dir, name_no_ext + ext)
+            else:
+                name_no_ext = os.path.splitext(base_name)[0]
+                final_file = os.path.join(save_dir, name_no_ext + ".mp4")
+
+            encode_ok, encode_err = _reencode_to_universal(raw_file, final_file, get_ffmpeg_path(), is_audio)
+
+            try:
+                os.remove(raw_file)
+            except Exception:
+                pass
+
+            if encode_ok:
+                yield f"data: {json.dumps({'log': f'[encode] Done. Saved as: {final_file}'})}\n\n"
+                yield f"data: {json.dumps({'status': 'done'})}\n\n"
+            else:
+                yield f"data: {json.dumps({'status': 'error', 'detail': f'FFmpeg re-encode failed: {encode_err[:500]}'})}\n\n"
+
         except Exception as e:
             yield f"data: {json.dumps({'status': 'error', 'detail': str(e)})}\n\n"
 
