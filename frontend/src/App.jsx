@@ -425,7 +425,7 @@ export default function App() {
                 value={url}
                 onChange={(e) => { setUrl(e.target.value); setFetchError(''); }}
                 onKeyDown={(e) => e.key === 'Enter' && handleFetch()}
-                placeholder="Paste video or audio link here (e.g. YouTube, Vimeo, Gogoanime, Zoro, 9anime)..."
+                placeholder="Paste video or audio link here..."
                 className="flex-1 bg-transparent text-[13px] text-zinc-200 placeholder-zinc-650 outline-none w-full min-w-0"
               />
               {fetchError && (
