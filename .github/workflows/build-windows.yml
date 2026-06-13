@@ -26,9 +26,9 @@ jobs:
 
       - name: Set up backend venv
         run: |
-          python -m venv backend\venv
-          backend\venv\Scripts\pip install --upgrade pip --quiet
-          backend\venv\Scripts\pip install -r backend\requirements.txt
+          python -m venv backend/venv
+          backend/venv/Scripts/python.exe -m pip install --upgrade pip --quiet
+          backend/venv/Scripts/python.exe -m pip install -r backend/requirements.txt
 
       - name: Install frontend packages
         run: npm install
