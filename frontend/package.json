@@ -1,6 +1,10 @@
 {
   "name": "fast-video-downloader",
   "description": "High-performance zero-dependency video downloader supporting 1000+ websites",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/krishan234qq-cloud/fast-video-downloader.git"
+  },
   "author": "Niko Krishan",
   "private": true,
   "version": "1.0.0",
@@ -36,6 +40,7 @@
     "vite": "^8.0.12"
   },
   "build": {
+    "publish": null,
     "appId": "com.fastvideodownloader.app",
     "productName": "Fast Video Downloader",
     "directories": {

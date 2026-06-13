@@ -150,7 +150,7 @@ def compile_backend(backend_dir, bin_dir):
         backend_name = "backend"
 
     log("Installing / upgrading PyInstaller in backend venv...")
-    subprocess.run([python_exe, "-m", "pip", "install", "--upgrade", "pyinstaller", "browser-cookie3"], check=True)
+    subprocess.run([python_exe, "-m", "pip", "install", "--upgrade", "pyinstaller", "browser-cookie3", "curl-cffi"], check=True)
 
     log("Compiling backend main.py into standalone sidecar binary...")
     try:
@@ -166,6 +166,8 @@ def compile_backend(backend_dir, bin_dir):
             "--collect-all", "browser_cookie3",
             "--hidden-import", "yt_dlp",
             "--collect-all", "yt_dlp",
+            "--hidden-import", "curl_cffi",
+            "--collect-all", "curl_cffi",
             os.path.join(backend_dir, "main.py")
         ], check=True)
     except subprocess.CalledProcessError as e:
@@ -238,7 +240,8 @@ def main():
 
     subprocess.run([
         "npx", "electron-builder", "build",
-        f"-c.directories.output={temp_build_dir}"
+        f"-c.directories.output={temp_build_dir}",
+        "--publish", "never"
     ], cwd=frontend_dir, shell=shell_val, check=True)
 
     release_dir = os.path.join(root_dir, "release")

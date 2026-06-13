@@ -81,6 +81,7 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [selectedBrowser, setSelectedBrowser] = useState(() => localStorage.getItem('selected_browser') || 'none');
   const [customUserAgent, setCustomUserAgent] = useState(() => localStorage.getItem('custom_user_agent') || '');
+  const [customCookies, setCustomCookies] = useState(() => localStorage.getItem('custom_cookies') || '');
   const [concurrentDownloads, setConcurrentDownloads] = useState(() => {
     const saved = localStorage.getItem('concurrent_downloads');
     return saved ? parseInt(saved, 10) : 8;
@@ -93,6 +94,10 @@ export default function App() {
   const updateCustomUserAgent = (ua) => {
     setCustomUserAgent(ua);
     localStorage.setItem('custom_user_agent', ua);
+  };
+  const updateCustomCookies = (c) => {
+    setCustomCookies(c);
+    localStorage.setItem('custom_cookies', c);
   };
   const updateConcurrentDownloads = (n) => {
     setConcurrentDownloads(n);
@@ -225,6 +230,7 @@ export default function App() {
           url: url.trim(),
           browser: selectedBrowser,
           user_agent: customUserAgent,
+          custom_cookies: customCookies,
         }),
       });
       if (!res.ok) {
@@ -280,6 +286,7 @@ export default function App() {
           browser: selectedBrowser,
           user_agent: customUserAgent,
           concurrent_downloads: concurrentDownloads,
+          custom_cookies: customCookies,
         }),
         signal: controller.signal,
       });
@@ -835,7 +842,21 @@ export default function App() {
                   value={customUserAgent}
                   onChange={(e) => updateCustomUserAgent(e.target.value)}
                   placeholder="Mozilla/5.0 (Windows NT 10.0; Win64; x64)..."
-                  className="bg-zinc-950/80 rounded-xl px-3 py-2 text-[11px] outline-none font-mono text-zinc-300 border border-zinc-800/50 focus:border-indigo-500/40 w-full placeholder-zinc-700"
+                  className="bg-zinc-950/80 rounded-xl px-3 py-2 text-[11px] outline-none font-mono text-zinc-350 border border-zinc-800/50 focus:border-indigo-500/40 w-full placeholder-zinc-700"
+                />
+              </div>
+
+              <div className="flex flex-col gap-2">
+                <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest font-display">Custom Cookies (Bypass Lock)</span>
+                <p className="text-[10px] text-zinc-500 leading-normal">
+                  Paste cookies in Netscape or JSON format to bypass browser database locks/encryption when browser is open.
+                </p>
+                <textarea
+                  value={customCookies}
+                  onChange={(e) => updateCustomCookies(e.target.value)}
+                  placeholder="# Netscape HTTP Cookie File or JSON array..."
+                  rows={4}
+                  className="bg-zinc-950/80 rounded-xl px-3 py-2 text-[11px] outline-none font-mono text-zinc-300 border border-zinc-800/50 focus:border-indigo-500/40 w-full placeholder-zinc-700 resize-y"
                 />
               </div>
 
