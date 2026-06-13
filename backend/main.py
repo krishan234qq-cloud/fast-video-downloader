@@ -605,8 +605,6 @@ def _build_anime_ydl_opts(url: str = "", browser: str = None, user_agent: str = 
             "Sec-Fetch-Site": "none",
         },
     }
-    if browser and browser.lower() != "none":
-        opts["cookiesfrombrowser"] = (browser.lower(), None, None, None)
     return opts
 
 
