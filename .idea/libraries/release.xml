@@ -1,0 +1,10 @@
+<component name="libraryTable">
+  <library name="release">
+    <CLASSES>
+      <root url="jar://$PROJECT_DIR$/release/Fast Video Downloader Setup 1.0.0.zip!/" />
+      <root url="jar://$PROJECT_DIR$/release/Fast Video Downloader - Mac Version.zip!/" />
+    </CLASSES>
+    <JAVADOC />
+    <SOURCES />
+  </library>
+</component>
