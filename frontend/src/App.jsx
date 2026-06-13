@@ -793,10 +793,10 @@ export default function App() {
                   })}
                 </div>
                 {selectedBrowser !== 'none' && (
-                  <div className="flex items-start gap-2 bg-amber-500/5 border border-amber-500/15 rounded-xl p-2.5 mt-1">
-                    <AlertCircle size={12} className="text-amber-400 mt-0.5 shrink-0" />
-                    <p className="text-[9px] text-amber-500/80 leading-normal">
-                      Important: Ensure {selectedBrowser} is fully closed before initiating downloads if you see cookies database lock errors.
+                  <div className="flex items-start gap-2 bg-emerald-500/5 border border-emerald-500/15 rounded-xl p-2.5 mt-1">
+                    <CheckCircle2 size={12} className="text-emerald-400 mt-0.5 shrink-0" />
+                    <p className="text-[9px] text-emerald-500/80 leading-normal">
+                      Cookies are read directly from {selectedBrowser} — your browser can stay open during download.
                     </p>
                   </div>
                 )}
