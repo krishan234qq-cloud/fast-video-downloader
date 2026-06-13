@@ -1,73 +1,40 @@
 # Fast Video Downloader — macOS
 
-> A desktop app to download and trim video & audio from 1000+ websites.  
+> Download and trim video & audio from 1000+ websites.  
 > No browser extensions, no watermarks, no limits.
 
 **Made by [NioKrishan](https://www.instagram.com/nightlander_krishan/)**
 
 ---
 
-## What You Need
+## Installing the App
 
-| Requirement | Minimum Version | Handled automatically |
-|-------------|----------------|-----------------------|
-| macOS       | 11 Big Sur+    |                       |
-| Python      | 3.10+          | yes, via Homebrew     |
-| Node.js     | 18+            | yes, via Homebrew     |
-| FFmpeg      | any            | yes, via Homebrew     |
-| Homebrew    | any            | yes                   |
+This package includes a ready-to-install `.dmg`. No Python, no Node.js, no Homebrew — nothing extra required.
+
+1. Open the `release/` folder in this ZIP
+2. Double-click `Fast Video Downloader-1.0.0.dmg`
+3. Drag **Fast Video Downloader** into your **Applications** folder
+4. Open **Finder → Applications**, find the app, right-click it and choose **Open**
+
+That's it. The app opens and you're ready to use it.
 
 Works on both Intel Macs and Apple Silicon (M1 / M2 / M3).
 
 ---
 
-## Installation
+### First Launch Warning
 
-### Step 1 — Open Terminal
+On first open, macOS may say the app is from an unidentified developer. This is normal for apps distributed outside the Mac App Store.
 
-Press **Cmd + Space**, type **Terminal**, press **Enter**.
+- Click **Cancel** on the first warning
+- Go to **System Settings → Privacy & Security**, scroll down, click **Open Anyway**
+- Click **Open** in the confirmation dialog
 
----
-
-### Step 2 — Go to This Folder
-
-Type `cd ` (with a space after it), then drag this folder from Finder into the Terminal window and press **Enter**.
-
-```
-cd /path/to/fast-video-downloader-mac
-```
-
----
-
-### Step 3 — Run the Installer
+Or run this once in Terminal if you see "App is damaged":
 
 ```bash
-chmod +x install-mac.sh && ./install-mac.sh
+xattr -cr "/Applications/Fast Video Downloader.app"
 ```
-
-The first run downloads Homebrew, Python, Node.js, and FFmpeg. This takes about 5–15 minutes depending on your internet speed. You may be asked for your Mac login password — that is normal.
-
----
-
-## Launching the App
-
-After installation finishes, run this every time you want to open the app:
-
-```bash
-./start-desktop-app.sh
-```
-
----
-
-## Building a .dmg (Developers Only)
-
-If you want to produce a standalone `.dmg` that anyone can install without needing Python or Node.js:
-
-```bash
-python3 package.py
-```
-
-This compiles the backend, bundles `ffmpeg` and `yt-dlp`, builds the frontend, and outputs the installer to `release/Fast Video Downloader-1.0.0.dmg`.
 
 ---
 
@@ -90,53 +57,41 @@ This compiles the backend, bundles `ffmpeg` and `yt-dlp`, builds the frontend, a
 
 ## Troubleshooting
 
-### Permission denied when running a script
-
-```bash
-chmod +x install-mac.sh start-desktop-app.sh install-dependencies.sh
-```
-
-### macOS says the app is from an unidentified developer
+### The app doesn't open / "unidentified developer"
 
 1. Open **System Settings → Privacy & Security**
 2. Scroll down and click **Open Anyway**
-3. Click **Open** in the confirmation dialog
+3. Click **Open**
 
-### App is damaged and can't be opened
+### "App is damaged and can't be opened"
 
 ```bash
 xattr -cr "/Applications/Fast Video Downloader.app"
 ```
 
-### Port 8000 already in use
+---
+
+## For Developers — Running from Source
+
+If you want to run the app from source code or build your own `.dmg`, you will need Python 3.10+, Node.js 18+, and FFmpeg. Use the included installer script to set everything up automatically:
 
 ```bash
-lsof -ti:8000 | xargs kill -9
+chmod +x install-mac.sh && ./install-mac.sh
+```
+
+Then launch in dev mode:
+
+```bash
 ./start-desktop-app.sh
 ```
 
-### Homebrew password prompt
-
-Type your Mac login password and press **Enter**. Characters will not appear as you type — that is normal.
-
-### brew not found after install on Apple Silicon
+To build a new `.dmg`:
 
 ```bash
-eval "$(/opt/homebrew/bin/brew shellenv)"
+python3 package.py
 ```
 
----
-
-## Files in This Package
-
-| File | Purpose |
-|------|---------|
-| `install-mac.sh` | Run this first — sets up all dependencies |
-| `start-desktop-app.sh` | Launches the app |
-| `package.py` | Builds a distributable .dmg |
-| `install-dependencies.sh` | Lightweight dependency check without auto-Homebrew |
-| `backend/` | Python FastAPI server source |
-| `frontend/` | React + Electron source |
+Output goes to `release/Fast Video Downloader-1.0.0.dmg`.
 
 ---
 
@@ -157,7 +112,6 @@ Built by **[NioKrishan](https://www.instagram.com/nightlander_krishan/)** using 
 | [electron-builder](https://www.electron.build/) | App packaging | MIT |
 | [PyInstaller](https://pyinstaller.org/) | Python to standalone binary | GPL + exception |
 | [browser-cookie3](https://github.com/borisbabic/browser_cookie3) | Cookie extraction | MIT |
-| [Homebrew](https://brew.sh/) | macOS package manager | BSD 2-Clause |
 
 ---
 
