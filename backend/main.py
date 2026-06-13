@@ -351,24 +351,40 @@ def _build_ydl_opts(browser: str = None, user_agent: str = None, force_generic: 
     return opts
 
 
-def _build_anime_ydl_opts(browser: str = None, user_agent: str = None) -> dict:
+def _build_anime_ydl_opts(url: str = "", browser: str = None, user_agent: str = None) -> dict:
     ua = user_agent or (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/124.0.0.0 Safari/537.36"
     )
+    try:
+        from urllib.parse import urlparse
+        parsed = urlparse(url)
+        origin = f"{parsed.scheme}://{parsed.netloc}"
+        referer = origin + "/"
+    except Exception:
+        origin = ""
+        referer = ""
+
     opts = {
         "quiet": True,
         "no_warnings": True,
         "extract_flat": False,
         "check_formats": False,
         "socket_timeout": 45,
-        "retries": 8,
-        "fragment_retries": 8,
+        "retries": 10,
+        "fragment_retries": 10,
+        "geo_bypass": True,
         "http_headers": {
             "User-Agent": ua,
-            "Referer": "",
-            "Origin": "",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.5",
+            "Referer": referer,
+            "Origin": origin,
+            "DNT": "1",
+            "Sec-Fetch-Dest": "document",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Site": "none",
         },
     }
     if browser and browser.lower() != "none":
@@ -378,10 +394,21 @@ def _build_anime_ydl_opts(browser: str = None, user_agent: str = None) -> dict:
 
 def _is_network_error(msg: str) -> bool:
     lower = msg.lower()
+    if "errno 22" in lower or "invalid argument" in lower:
+        return False
     return any(k in lower for k in [
-        "errno 22", "error 22", "[errno", "winapi", "connection reset",
-        "connection refused", "timed out", "timeout", "network",
+        "[errno", "winapi", "connection reset",
+        "connection refused", "timed out", "timeout",
         "ssl", "certificate", "unable to connect",
+    ])
+
+
+def _is_anime_extractor_error(msg: str) -> bool:
+    lower = msg.lower()
+    return any(k in lower for k in [
+        "unsupported url", "no video formats found", "unable to extract",
+        "this video is not available", "invalid argument", "errno 22",
+        "cloudflare", "403", "access denied",
     ])
 
 
@@ -398,13 +425,29 @@ def _extract_info_with_fallback(url: str, browser: str = None, user_agent: str =
         )
 
     if is_anime_url(url):
-        try:
-            opts = _build_anime_ydl_opts(browser, user_agent)
-            with yt_dlp.YoutubeDL(opts) as ydl:
-                info = ydl.extract_info(url, download=False)
-                return info, False
-        except Exception as anime_err:
-            pass
+        last_anime_err = None
+        for impersonate in ["chrome", None]:
+            try:
+                opts = _build_anime_ydl_opts(url, browser, user_agent)
+                if impersonate:
+                    opts["impersonate"] = impersonate
+                with yt_dlp.YoutubeDL(opts) as ydl:
+                    info = ydl.extract_info(url, download=False)
+                    return info, False
+            except Exception as anime_err:
+                last_anime_err = anime_err
+                continue
+        if last_anime_err:
+            err_msg = str(last_anime_err)
+            if _is_anime_extractor_error(err_msg):
+                raise Exception(
+                    "Could not extract video from this anime site. "
+                    "Many anime sites use Cloudflare or JavaScript-protected players. "
+                    "Try: 1) Select your browser in Settings to pass cookies, "
+                    "2) Open the video in your browser, find the direct .m3u8 or .mp4 URL and paste that instead, "
+                    "3) Try a mirror site (gogoanime, animepahe, etc.)."
+                )
+            raise last_anime_err
 
     last_error = None
     for attempt in range(2):
@@ -494,6 +537,8 @@ async def get_video_info(request: InfoRequest):
         }
     except Exception as e:
         err_msg = str(e)
+        if "could not extract video from this anime site" in err_msg.lower() or "cloudflare" in err_msg.lower():
+            raise HTTPException(status_code=400, detail=err_msg)
         if "sankakucomplex" in err_msg.lower():
             raise HTTPException(status_code=400, detail=err_msg)
         is_real_browser = request.browser and request.browser.lower() != "none"
@@ -577,6 +622,12 @@ async def download_video(request: DownloadRequest):
             "AppleWebKit/537.36 (KHTML, like Gecko) "
             "Chrome/124.0.0.0 Safari/537.36"
         )
+        try:
+            from urllib.parse import urlparse
+            parsed = urlparse(request.url)
+            site_origin = f"{parsed.scheme}://{parsed.netloc}"
+        except Exception:
+            site_origin = ""
         cmd = get_ytdlp_command() + [
             "--format", fmt,
             "--output", out_template,
@@ -584,10 +635,16 @@ async def download_video(request: DownloadRequest):
             "--newline",
             "--no-check-formats",
             "--socket-timeout", "45",
-            "--retries", "8",
-            "--fragment-retries", "8",
+            "--retries", "10",
+            "--fragment-retries", "10",
             "-N", str(request.concurrent_downloads),
+            "--geo-bypass",
             "--user-agent", ua,
+            "--add-header", f"Referer:{site_origin}/",
+            "--add-header", f"Origin:{site_origin}",
+            "--add-header", "Accept:text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+            "--add-header", "Accept-Language:en-US,en;q=0.5",
+            "--add-header", "DNT:1",
         ]
     else:
         cmd = get_ytdlp_command() + [
