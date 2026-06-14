@@ -751,8 +751,45 @@ def _extract_info_with_fallback(url: str, browser: str = None, user_agent: str =
     raise last_error
 
 
+def _probe_codecs(file_path: str, ffmpeg_path: str) -> tuple[str | None, str | None]:
+    try:
+        cmd = [ffmpeg_path, "-i", file_path]
+        res = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            stdin=subprocess.DEVNULL,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        video_codec = None
+        audio_codec = None
+        for line in res.stderr.splitlines():
+            if "Stream #" in line:
+                if "Video:" in line:
+                    m = re.search(r"Video:\s*([a-zA-Z0-9_-]+)", line)
+                    if m:
+                        video_codec = m.group(1).lower()
+                elif "Audio:" in line:
+                    m = re.search(r"Audio:\s*([a-zA-Z0-9_-]+)", line)
+                    if m:
+                        audio_codec = m.group(1).lower()
+        return video_codec, audio_codec
+    except Exception:
+        return None, None
+
+
 def _reencode_to_universal(input_path: str, output_path: str, ffmpeg_path: str, is_audio: bool = False) -> tuple[bool, str]:
     if is_audio:
+        ext = os.path.splitext(input_path.lower())[1]
+        v_codec, a_codec = _probe_codecs(input_path, ffmpeg_path)
+        if ext == ".mp3" and a_codec == "mp3":
+            try:
+                shutil.copy2(input_path, output_path)
+                return True, ""
+            except Exception as e:
+                return False, str(e)
         cmd = [
             ffmpeg_path, "-y",
             "-i", input_path,
@@ -762,20 +799,64 @@ def _reencode_to_universal(input_path: str, output_path: str, ffmpeg_path: str, 
             output_path,
         ]
     else:
-        cmd = [
-            ffmpeg_path, "-y",
-            "-i", input_path,
-            "-vcodec", "libx264",
-            "-crf", "18",
-            "-preset", "fast",
-            "-profile:v", "high",
-            "-level", "4.1",
-            "-pix_fmt", "yuv420p",
-            "-acodec", "aac",
-            "-b:a", "192k",
-            "-movflags", "+faststart",
-            output_path,
-        ]
+        ext = os.path.splitext(input_path.lower())[1]
+        v_codec, a_codec = _probe_codecs(input_path, ffmpeg_path)
+        is_v_universal = (v_codec == "h264")
+        is_a_universal = (not a_codec or a_codec == "aac")
+        if is_v_universal and is_a_universal:
+            if ext == ".mp4":
+                try:
+                    shutil.copy2(input_path, output_path)
+                    return True, ""
+                except Exception as e:
+                    return False, str(e)
+            else:
+                cmd = [
+                    ffmpeg_path, "-y",
+                    "-i", input_path,
+                    "-c", "copy",
+                    "-movflags", "+faststart",
+                    output_path,
+                ]
+        elif is_v_universal:
+            cmd = [
+                ffmpeg_path, "-y",
+                "-i", input_path,
+                "-vcodec", "copy",
+                "-acodec", "aac",
+                "-b:a", "192k",
+                "-movflags", "+faststart",
+                output_path,
+            ]
+        elif is_a_universal:
+            cmd = [
+                ffmpeg_path, "-y",
+                "-i", input_path,
+                "-vcodec", "libx264",
+                "-preset", "superfast",
+                "-crf", "22",
+                "-profile:v", "high",
+                "-level", "4.1",
+                "-pix_fmt", "yuv420p",
+                "-acodec", "copy",
+                "-movflags", "+faststart",
+                output_path,
+            ]
+        else:
+            cmd = [
+                ffmpeg_path, "-y",
+                "-i", input_path,
+                "-vcodec", "libx264",
+                "-preset", "superfast",
+                "-crf", "22",
+                "-profile:v", "high",
+                "-level", "4.1",
+                "-pix_fmt", "yuv420p",
+                "-acodec", "aac",
+                "-b:a", "192k",
+                "-movflags", "+faststart",
+                output_path,
+            ]
     result = subprocess.run(
         cmd,
         stdout=subprocess.PIPE,
@@ -950,6 +1031,13 @@ async def download_video(request: DownloadRequest):
     if request.user_agent and not is_anime:
         cmd += ["--user-agent", request.user_agent]
 
+    if request.download_type == "custom":
+        cmd += ["--download-sections", f"*{request.start_time}-{request.end_time}"]
+
+    ffmpeg_bin = get_ffmpeg_path()
+    if os.path.isabs(ffmpeg_bin):
+        cmd += ["--ffmpeg-location", ffmpeg_bin]
+
     cmd.append(download_url)
 
     def stream_output():
@@ -997,33 +1085,7 @@ async def download_video(request: DownloadRequest):
                 return
 
             if request.download_type == "custom":
-                yield f"data: {json.dumps({'log': '[trim] Trimming requested section...'})}\n\n"
-                trimmed_raw = raw_file.replace(".raw.", ".trimmed_raw.")
-                trim_cmd = [
-                    get_ffmpeg_path(), "-y",
-                    "-ss", request.start_time,
-                    "-to", request.end_time,
-                    "-i", raw_file,
-                    "-c", "copy",
-                    trimmed_raw,
-                ]
-                trim_result = subprocess.run(
-                    trim_cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    stdin=subprocess.DEVNULL,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                )
-                if trim_result.returncode != 0:
-                    yield f"data: {json.dumps({'status': 'error', 'detail': f'FFmpeg trim failed: {trim_result.stderr}'})}\n\n"
-                    return
-                try:
-                    os.remove(raw_file)
-                except Exception:
-                    pass
-                raw_file = trimmed_raw
+                yield f"data: {json.dumps({'log': '[trim] Section extracted successfully'})}\n\n"
 
             yield f"data: {json.dumps({'log': '[encode] Re-encoding to universal H.264/AAC format for maximum compatibility...'})}\n\n"
 
